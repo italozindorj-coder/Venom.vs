@@ -1,0 +1,2810 @@
+--[[
+  K2 RIDDLER — visual 1:1 with K2 Code Sniper
+  Same size, header, home theme cycle, bottom MAIN/SETTINGS nav
+  Logic stubs (no API key yet)
+]]
+
+repeat task.wait() until game:IsLoaded()
+pcall(function()
+	local old = getgenv().K2RiddlerGui
+	if old and old.Parent then old:Destroy() end
+end)
+getgenv().K2RiddlerLoaded = true
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local LP = Players.LocalPlayer
+
+_G.RiddlerAIEnabled = false
+_G.RiddlerListenEnabled = false
+_G.RiddlerAutoRedeem = false
+_G.RiddlerBgIndex = tonumber(_G.RiddlerBgIndex) or 1
+
+local CFG_FILE = "k2_riddler_config.json"
+local currentQuestion, currentAnswer = "", ""
+
+local function saveCfg()
+	pcall(function()
+		local wf = writefile or (syn and syn.writefile)
+		if not wf then return end
+		wf(CFG_FILE, HttpService:JSONEncode({
+			AIEnabled = _G.RiddlerAIEnabled == true,
+			ListenEnabled = _G.RiddlerListenEnabled == true,
+			AutoRedeem = _G.RiddlerAutoRedeem == true,
+			bgIndex = tonumber(_G.RiddlerBgIndex) or 1,
+		}))
+	end)
+end
+
+pcall(function()
+	local rf = readfile or (syn and syn.readfile)
+	local isf = isfile or (syn and syn.isfile)
+	if not rf then return end
+	if isf and not isf(CFG_FILE) then return end
+	local raw = rf(CFG_FILE)
+	if type(raw) ~= "string" or #raw < 2 then return end
+	local cfg = HttpService:JSONDecode(raw)
+	if type(cfg) ~= "table" then return end
+	if cfg.AIEnabled ~= nil then _G.RiddlerAIEnabled = cfg.AIEnabled == true end
+	if cfg.ListenEnabled ~= nil then _G.RiddlerListenEnabled = cfg.ListenEnabled == true end
+	if cfg.AutoRedeem ~= nil then _G.RiddlerAutoRedeem = cfg.AutoRedeem == true end
+	if cfg.bgIndex ~= nil then _G.RiddlerBgIndex = math.clamp(math.floor(tonumber(cfg.bgIndex) or 1), 1, 12) end
+end)
+
+local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
+local Theme = {
+	Void = rgb(12, 8, 16), Panel = rgb(32, 16, 12), PanelSoft = rgb(28, 14, 12), Card = rgb(36, 18, 14),
+	Cyan = rgb(255, 140, 40), Teal = rgb(255, 160, 60), Violet = rgb(200, 90, 40),
+	Green = rgb(110, 230, 140), Amber = rgb(255, 190, 80), Red = rgb(255, 90, 70),
+	Text = rgb(255, 245, 230), Muted = rgb(200, 160, 120), ToggleOff = rgb(40, 24, 18),
+	Border = rgb(255, 120, 30), Accent = rgb(255, 140, 40), Accent2 = rgb(255, 90, 20),
+	Hover = rgb(55, 28, 14), Contrast = rgb(12, 8, 16), Top = rgb(36, 18, 10), Side = rgb(10, 6, 12),
+}
+local FT, FB, FM = Enum.Font.GothamBlack, Enum.Font.GothamBold, Enum.Font.GothamMedium
+local TIS = TweenInfo.new(0.28, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local TIB = TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+local function corner(p, r)
+	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, r or 12); c.Parent = p; return c
+end
+local function stroke(p, col, th, tr)
+	local s = Instance.new("UIStroke"); s.Color = col or Theme.Cyan; s.Thickness = th or 1; s.Transparency = tr or 0.4; s.Parent = p; return s
+end
+local function tw(obj, props, info)
+	if not obj or not obj.Parent then return end
+	TS:Create(obj, info or TIS, props):Play()
+end
+
+local themeRegistry, toggleRegistry = {}, {}
+local function register(obj, prop, key)
+	if obj then table.insert(themeRegistry, { obj = obj, prop = prop, key = key }) end
+end
+
+local PANEL_W, PANEL_H = 262, 368
+
+local BG_URLS = {
+	"rbxassetid://15230369613", -- Halloween (default)
+	"https://files.catbox.moe/a3ypd8.jpg", -- sakura / Grey uses this flower bg
+	"https://files.catbox.moe/5j8ga6.jpg", -- warm floral
+	"https://files.catbox.moe/om9irg.png", -- ice
+	"https://files.catbox.moe/mw3stx.jpg", -- blue
+	"https://files.catbox.moe/dgev5r.jpg", -- purple
+	"https://files.catbox.moe/6jh0ge.jpg", -- green
+	"https://files.catbox.moe/87erl9.png", -- dark
+	"https://files.catbox.moe/alsa0o.jpg", -- amber
+}
+
+local PRESETS = {
+	{ name="Halloween", bg=rgb(12,8,16), top=rgb(36,18,10), side=rgb(10,6,12), panel=rgb(32,16,12), hover=rgb(55,28,14),
+	  border=rgb(255,120,30), accent=rgb(255,140,40), accent2=rgb(255,90,20), text=rgb(255,245,230),
+	  muted=rgb(200,160,120), contrast=rgb(12,8,16), imgT=0.42, shadeT=0.34 },
+	{ name="Grey", bg=rgb(10,10,12), top=rgb(28,28,32), side=rgb(8,8,10), panel=rgb(24,24,28), hover=rgb(40,40,46),
+	  border=rgb(160,160,170), accent=rgb(210,210,220), accent2=rgb(140,140,150), text=rgb(245,245,250),
+	  muted=rgb(150,150,160), contrast=rgb(10,10,12), imgT=0.48, shadeT=0.40 },
+	{ name="Sakura", bg=rgb(13,11,15), top=rgb(40,22,38), side=rgb(12,8,14), panel=rgb(36,20,34), hover=rgb(55,30,50),
+	  border=rgb(180,60,120), accent=rgb(255,74,177), accent2=rgb(255,120,190), text=rgb(255,245,250),
+	  muted=rgb(194,155,180), contrast=rgb(13,11,15), imgT=0.48, shadeT=0.38 },
+	{ name="Warm", bg=rgb(14,10,12), top=rgb(38,22,28), side=rgb(12,8,10), panel=rgb(36,22,28), hover=rgb(52,32,38),
+	  border=rgb(170,80,110), accent=rgb(255,100,160), accent2=rgb(230,90,140), text=rgb(255,242,248),
+	  muted=rgb(190,150,165), contrast=rgb(14,10,12), imgT=0.50, shadeT=0.40 },
+	{ name="Ice", bg=rgb(8,12,22), top=rgb(18,28,44), side=rgb(6,10,18), panel=rgb(22,34,54), hover=rgb(38,55,80),
+	  border=rgb(120,180,230), accent=rgb(185,225,255), accent2=rgb(120,190,235), text=rgb(235,245,255),
+	  muted=rgb(140,170,195), contrast=rgb(8,12,22), imgT=0.52, shadeT=0.36 },
+	{ name="Ocean", bg=rgb(6,10,22), top=rgb(14,24,48), side=rgb(4,8,18), panel=rgb(16,28,52), hover=rgb(28,48,78),
+	  border=rgb(80,140,220), accent=rgb(90,180,255), accent2=rgb(60,140,220), text=rgb(230,240,255),
+	  muted=rgb(120,150,190), contrast=rgb(6,10,22), imgT=0.52, shadeT=0.38 },
+	{ name="Violet", bg=rgb(14,10,22), top=rgb(30,20,48), side=rgb(10,8,18), panel=rgb(34,24,54), hover=rgb(50,36,72),
+	  border=rgb(150,100,220), accent=rgb(180,120,255), accent2=rgb(220,140,255), text=rgb(245,238,255),
+	  muted=rgb(170,150,200), contrast=rgb(14,10,22), imgT=0.50, shadeT=0.40 },
+	{ name="Jade", bg=rgb(8,16,12), top=rgb(16,32,24), side=rgb(6,12,10), panel=rgb(20,40,30), hover=rgb(32,58,44),
+	  border=rgb(80,180,130), accent=rgb(100,230,170), accent2=rgb(70,190,140), text=rgb(235,255,245),
+	  muted=rgb(140,180,160), contrast=rgb(8,16,12), imgT=0.52, shadeT=0.38 },
+	{ name="Noir", bg=rgb(8,8,12), top=rgb(22,22,30), side=rgb(6,6,10), panel=rgb(26,26,36), hover=rgb(40,40,54),
+	  border=rgb(160,170,200), accent=rgb(220,230,255), accent2=rgb(140,160,200), text=rgb(245,248,255),
+	  muted=rgb(150,155,175), contrast=rgb(8,8,12), imgT=0.46, shadeT=0.42 },
+	{ name="Amber", bg=rgb(16,12,8), top=rgb(36,26,14), side=rgb(12,10,6), panel=rgb(40,28,16), hover=rgb(58,42,24),
+	  border=rgb(200,140,60), accent=rgb(255,180,80), accent2=rgb(230,150,60), text=rgb(255,248,235),
+	  muted=rgb(190,165,130), contrast=rgb(16,12,8), imgT=0.50, shadeT=0.40 },
+	{ name="Lavender", bg=rgb(14,12,20), top=rgb(30,24,42), side=rgb(10,10,16), panel=rgb(34,28,48), hover=rgb(50,42,68),
+	  border=rgb(160,130,210), accent=rgb(200,160,255), accent2=rgb(230,180,255), text=rgb(248,242,255),
+	  muted=rgb(170,155,195), contrast=rgb(14,12,20), imgT=0.50, shadeT=0.38 },
+}
+
+local function loadThemeInto(p)
+	Theme.Void, Theme.Panel, Theme.PanelSoft = p.bg, p.panel, p.top
+	Theme.Card, Theme.Cyan, Theme.Teal = p.panel, p.accent, p.accent2
+	Theme.Violet, Theme.Text, Theme.Muted = p.accent2, p.text, p.muted
+	Theme.ToggleOff, Theme.Border = p.side, p.border
+	Theme.Accent, Theme.Accent2, Theme.Hover = p.accent, p.accent2, p.hover
+	Theme.Contrast, Theme.Top, Theme.Side = p.contrast, p.top, p.side
+end
+
+local bgIndex = math.clamp(tonumber(_G.RiddlerBgIndex) or 1, 1, #PRESETS)
+loadThemeInto(PRESETS[bgIndex])
+
+local function resolveBg(url, idx)
+	if type(url) ~= "string" or url == "" then return nil end
+	-- Roblox asset ids work as Image directly
+	if url:find("^rbxassetid://") then return url end
+	if type(getcustomasset) ~= "function" then return nil end
+	local folder = "k2_riddler_bg"
+	pcall(function()
+		local mf = makefolder or (syn and syn.makefolder)
+		if mf then pcall(mf, folder) end
+	end)
+	local ext = (url:find("%.png") and ".png") or ".jpg"
+	local fname = folder .. "/bg" .. tostring(idx) .. ext
+	local has = false
+	pcall(function() if isfile and isfile(fname) then has = true end end)
+	if not has then
+		local ok, data = pcall(function() return game:HttpGet(url) end)
+		if not ok or type(data) ~= "string" or #data < 500 then
+			-- fallback request APIs
+			pcall(function()
+				local req = (syn and syn.request) or (http and http.request) or http_request or request
+				if not req then return end
+				local res = req({ Url = url, Method = "GET" })
+				if res and type(res.Body) == "string" and #res.Body > 500 then
+					data = res.Body
+					ok = true
+				end
+			end)
+		end
+		if ok and type(data) == "string" and #data > 500 then
+			pcall(function()
+				local wf = writefile or (syn and syn.writefile)
+				if wf then wf(fname, data) end
+			end)
+		end
+	end
+	local ok2, asset = pcall(function() return getcustomasset(fname) end)
+	if ok2 and type(asset) == "string" and asset ~= "" then return asset end
+	return nil
+end
+
+local refs = {}
+local ScreenGui, MainFrame, Orb, PageMain, PageSettings
+
+-- ========== CODE BOX / REDEEM (from K2 Code Sniper paths) ==========
+local _cachedBox = nil
+local function formatCode(c)
+	c = tostring(c or ""):gsub("%s+", ""):upper()
+	return c
+end
+
+local function isGuiVisible(obj)
+	local cur = obj
+	while cur and cur ~= game do
+		if cur:IsA("GuiObject") then
+			if cur.Visible == false then return false end
+			if cur.AbsoluteSize.X <= 0 or cur.AbsoluteSize.Y <= 0 then return false end
+		end
+		cur = cur.Parent
+	end
+	return true
+end
+
+local function _isCodeBox(obj)
+	if not obj or not obj:IsA("TextBox") then return false end
+	if ScreenGui and obj:IsDescendantOf(ScreenGui) then return false end
+	local okVis = true
+	pcall(function() okVis = isGuiVisible(obj) end)
+	if not okVis then return false end
+	local hint = ((obj.PlaceholderText or "") .. " " .. obj.Name):lower()
+	if hint:find("code", 1, true) or hint:find("redeem", 1, true)
+		or hint:find("enter", 1, true) or hint:find("type", 1, true)
+		or hint:find("here", 1, true) then
+		return true
+	end
+	local sz = obj.AbsoluteSize
+	return sz.X >= 80 and sz.Y >= 20 and sz.Y <= 80
+end
+
+local function findCodeTextBox()
+	local pg = LP:FindFirstChild("PlayerGui")
+	if pg then
+		local codes = pg:FindFirstChild("Codes")
+		if codes then
+			local inner = codes:FindFirstChild("Codes") or codes
+			local redeem = inner and inner:FindFirstChild("CodeRedeem")
+			local tbRedeem = redeem and redeem:FindFirstChild("TextBox")
+			if tbRedeem and tbRedeem:IsA("TextBox") then
+				if not tbRedeem.Active then
+					local t0 = os.clock()
+					while os.clock() - t0 < 0.8 and tbRedeem.Parent and not tbRedeem.Active do
+						task.wait(0.05)
+					end
+				end
+				_cachedBox = tbRedeem
+				return tbRedeem
+			end
+			local main = inner and inner:FindFirstChild("Main")
+			local tb = main and main:FindFirstChild("TextBox")
+			if tb and tb:IsA("TextBox") then
+				_cachedBox = tb
+				return tb
+			end
+			for _, d in ipairs(codes:GetDescendants()) do
+				if d:IsA("TextBox") and d:FindFirstAncestor("CodeRedeem") then
+					_cachedBox = d
+					return d
+				end
+			end
+			for _, d in ipairs(codes:GetDescendants()) do
+				if d:IsA("TextBox") then
+					_cachedBox = d
+					return d
+				end
+			end
+		end
+	end
+	if _cachedBox then
+		local still = false
+		pcall(function()
+			still = _cachedBox.Parent ~= nil and _isCodeBox(_cachedBox)
+		end)
+		if still then return _cachedBox end
+		_cachedBox = nil
+	end
+	local focused = nil
+	pcall(function() focused = UIS:GetFocusedTextBox() end)
+	if focused and _isCodeBox(focused) then
+		_cachedBox = focused
+		return focused
+	end
+	if pg then
+		for _, d in ipairs(pg:GetDescendants()) do
+			if _isCodeBox(d) then
+				_cachedBox = d
+				return d
+			end
+		end
+	end
+	return nil
+end
+
+local function paintTextBox(textBox, fullText)
+	if not textBox then return false end
+	fullText = tostring(fullText or "")
+	local ok = false
+	pcall(function()
+		textBox.Text = fullText
+		if textBox:FindFirstChild("Text") then textBox.Text = fullText end
+		pcall(function()
+			local bind = textBox:FindFirstChildOfClass("StringValue")
+			if bind then bind.Value = fullText end
+		end)
+		ok = (tostring(textBox.Text or "") == fullText) or (#fullText > 0 and tostring(textBox.Text or ""):upper():find(fullText, 1, true) ~= nil)
+	end)
+	return ok
+end
+
+local function fireSubmitButton(textBox)
+	local root = textBox and textBox.Parent
+	for _ = 1, 6 do
+		if not root then break end
+		for _, d in ipairs(root:GetDescendants()) do
+			if d:IsA("TextButton") or d:IsA("ImageButton") then
+				local n = (d.Name .. " " .. (d.Text or "")):lower()
+				if n:find("redeem", 1, true) or n:find("submit", 1, true) or n:find("claim", 1, true) then
+					pcall(function()
+						if firesignal and d.Activated then firesignal(d.Activated) end
+					end)
+					pcall(function()
+						if typeof(getconnections) == "function" then
+							for _, c in ipairs(getconnections(d.MouseButton1Click) or {}) do
+								pcall(function() c:Fire() end)
+							end
+						end
+					end)
+					pcall(function() d:Activate() end)
+					return true
+				end
+			end
+		end
+		root = root.Parent
+	end
+	return false
+end
+
+local _rfRemote = nil
+local function redeemViaRF(code)
+	if not _rfRemote then
+		pcall(function()
+			for _, r in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+				if r:IsA("RemoteFunction") then
+					local n = r.Name:lower()
+					if n:find("code", 1, true) or n:find("redeem", 1, true) or n:find("promo", 1, true) then
+						_rfRemote = r
+						break
+					end
+				end
+			end
+		end)
+	end
+	if not _rfRemote then return false end
+	local ok = pcall(function()
+		_rfRemote:InvokeServer(formatCode(code))
+	end)
+	return ok
+end
+
+local function flashSub(msg)
+	if refs.subtitle then
+		refs.subtitle.Text = msg
+		task.delay(1.2, function()
+			if refs.subtitle then refs.subtitle.Text = "discord.gg/k2scripts" end
+		end)
+	end
+end
+
+local function setQuestion(q)
+	currentQuestion = tostring(q or "")
+	if refs.qLabel then refs.qLabel.Text = currentQuestion ~= "" and currentQuestion or "Waiting for riddle..." end
+	if refs.statusSub then
+		refs.statusSub.Text = (currentAnswer ~= "" and "Answer ready") or (currentQuestion ~= "" and "Riddle detected") or "Waiting for riddle"
+	end
+end
+
+local function setAnswer(a)
+	currentAnswer = formatCode(a)
+	if refs.aLabel then refs.aLabel.Text = currentAnswer ~= "" and currentAnswer or "—" end
+	if refs.statusSub then
+		refs.statusSub.Text = (currentAnswer ~= "" and "Answer ready") or (currentQuestion ~= "" and "Riddle detected") or "Waiting for riddle"
+	end
+	-- Auto redeem when answer arrives
+	if currentAnswer ~= "" and _G.RiddlerAutoRedeem then
+		task.defer(function()
+			if type(_G.K2RiddlerRedeem) == "function" then
+				_G.K2RiddlerRedeem()
+			end
+		end)
+	end
+end
+
+local function clearAll()
+	setQuestion("")
+	setAnswer("")
+	flashSub("Cleared")
+end
+
+local function copyAnswer()
+	if currentAnswer == "" then
+		flashSub("Nothing to copy")
+		return
+	end
+	local ok = false
+	pcall(function()
+		if setclipboard then setclipboard(currentAnswer); ok = true end
+	end)
+	pcall(function()
+		if not ok and toclipboard then toclipboard(currentAnswer); ok = true end
+	end)
+	flashSub(ok and ("Copied " .. currentAnswer) or "Clipboard unavailable")
+end
+
+local _lastRedeem, _lastRedeemAt = "", 0
+local function redeemAnswer()
+	local code = formatCode(currentAnswer)
+	if code == "" then
+		flashSub("No answer")
+		return false
+	end
+	if code == _lastRedeem and (tick() - _lastRedeemAt) < 1.5 then
+		return false
+	end
+	local textBox = findCodeTextBox()
+	if not textBox then
+		flashSub("Open Codes UI")
+		return false
+	end
+	local wrote = paintTextBox(textBox, code)
+	if not wrote then
+		pcall(function() textBox.Text = code end)
+	end
+	task.wait(0.05)
+	pcall(function()
+		local cur = tostring(textBox.Text or "")
+		if formatCode(cur) ~= code then paintTextBox(textBox, code) end
+	end)
+	pcall(function() fireSubmitButton(textBox) end)
+	pcall(function() redeemViaRF(code) end)
+	pcall(function()
+		if textBox:IsFocused() then textBox:ReleaseFocus(false) end
+	end)
+	_lastRedeem, _lastRedeemAt = code, tick()
+	flashSub("Redeemed " .. code)
+	return true
+end
+
+
+-- ========== AI / LISTEN (Luna-style Groq pipeline) ==========
+local httpRequest = (syn and syn.request) or http_request or request or (http and http.request)
+local HS = HttpService
+local GROQ_API_KEY = (getgenv().GROQ_API_KEY and #tostring(getgenv().GROQ_API_KEY) > 0 and tostring(getgenv().GROQ_API_KEY))
+	or "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"
+
+
+-- Require game ModuleScripts (Traced Riddler approach)
+local function requireData(mod)
+	if not mod then return nil end
+	local ok, res = pcall(require, mod)
+	if ok then return res end
+	return nil
+end
+
+-- LIVE SAB intelligence from ReplicatedStorage.Datas (Animals, Updates, Mutations)
+local function buildSabGameContext()
+	local lines = {}
+	local function add(t) lines[#lines+1] = t end
+	local RS = game:GetService("ReplicatedStorage")
+
+	local function requireData(mod)
+		if not mod then return nil end
+		local ok, data = pcall(require, mod)
+		if ok then return data end
+		return nil
+	end
+
+	local function scanFolder(folder, label, maxN)
+		maxN = maxN or 80
+		if not folder then return end
+		local names = {}
+		for _, child in ipairs(folder:GetChildren()) do
+			names[#names+1] = child.Name
+		end
+		table.sort(names)
+		if #names == 0 then return end
+		add(label .. " (" .. #names .. "): " .. table.concat(names, ", ", 1, math.min(#names, maxN)))
+		if #names > maxN then add("... +" .. (#names - maxN) .. " more") end
+	end
+
+	-- Core datas modules
+	local datas = RS:FindFirstChild("Datas") or RS:FindFirstChild("Data")
+	local shared = RS:FindFirstChild("Shared")
+	local packages = RS:FindFirstChild("Packages")
+
+	add("=== LIVE SAB SCAN ===")
+	add("PlaceId=" .. tostring(game.PlaceId))
+
+	-- Animals / Brainrots
+	local animals = nil
+	if datas then
+		animals = requireData(datas:FindFirstChild("Animals"))
+			or requireData(datas:FindFirstChild("Brainrots"))
+			or requireData(datas:FindFirstChild("Pets"))
+	end
+	if type(animals) == "table" then
+		local list = {}
+		for k, v in pairs(animals) do
+			local name = type(v) == "table" and tostring(v.DisplayName or v.Name or k) or tostring(k)
+			local price = type(v) == "table" and (v.Price or v.Generation or v.Income or v.CashPerSecond or v.CPS) or nil
+			local rar = type(v) == "table" and (v.Rarity or v.Tier) or nil
+			local src = type(v) == "table" and (v.ObtainedFrom or v.Source or v.Event or v.From) or nil
+			local row = name
+			if price then row = row .. " $" .. tostring(price) .. "/s" end
+			if rar then row = row .. " [" .. tostring(rar) .. "]" end
+			if src then row = row .. " @" .. tostring(src) end
+			list[#list+1] = { name = name, price = tonumber(price) or 0, row = row, src = tostring(src or ""), rar = tostring(rar or "") }
+		end
+		table.sort(list, function(a,b) return a.price > b.price end)
+		add("BRAINROTS ranked by income (top 40):")
+		for i = 1, math.min(40, #list) do
+			add("  " .. i .. ". " .. list[i].row)
+		end
+		-- Halloween tagged
+		local hall = {}
+		for _, it in ipairs(list) do
+			local blob = (it.name .. " " .. it.src .. " " .. it.rar):lower()
+			if blob:find("halloween", 1, true) or blob:find("witch", 1, true) or blob:find("spook", 1, true)
+				or blob:find("pumpkin", 1, true) or blob:find("skeleton", 1, true) or blob:find("frank", 1, true) then
+				hall[#hall+1] = it.row
+			end
+		end
+		if #hall > 0 then
+			add("HALLOWEEN-TAGGED (" .. #hall .. "): " .. table.concat(hall, " | ", 1, math.min(#hall, 25)))
+		end
+	else
+		add("BRAINROTS: module not found / not requireable")
+		if datas then scanFolder(datas, "Datas children") end
+	end
+
+	-- Traits (full link: name + event/source fields for riddle matching)
+	pcall(function()
+		local tr = datas and (requireData(datas:FindFirstChild("Traits")) or requireData(datas:FindFirstChild("Trait")))
+		if type(tr) ~= "table" then
+			scanFolder(datas and datas:FindFirstChild("Traits"), "Traits folder")
+			return
+		end
+		local rows = {}
+		for k, v in pairs(tr) do
+			if type(v) == "table" then
+				local n = tostring(v.DisplayText or v.Name or v.DisplayName or k)
+				local bits = { n }
+				local mult = v.Multiplier or v.Mult or v.IncomeMultiplier
+				if mult then bits[#bits+1] = "x" .. tostring(mult) end
+				for _, fk in ipairs({"Event", "EventName", "Source", "From", "ObtainedFrom", "HowToGet", "Category", "Type"}) do
+					if v[fk] ~= nil and tostring(v[fk]) ~= "" then
+						bits[#bits+1] = fk .. "=" .. tostring(v[fk])
+					end
+				end
+				rows[#rows+1] = table.concat(bits, " | ")
+			else
+				rows[#rows+1] = tostring(k)
+			end
+		end
+		table.sort(rows)
+		add("TRAITS DETAILED (" .. #rows .. "):")
+		for i = 1, math.min(#rows, 80) do
+			add("  " .. rows[i])
+		end
+	end)
+
+	-- Rebirths / Gears detailed
+	pcall(function()
+		for _, modName in ipairs({"Rebirths", "Rebirth", "Gears", "Gear", "Tools", "Items", "Shop"}) do
+			local mod = datas and datas:FindFirstChild(modName)
+			local data = requireData(mod)
+			if type(data) == "table" then
+				local rows = {}
+				for k, v in pairs(data) do
+					if type(v) == "table" then
+						local n = tostring(v.Name or v.DisplayName or v.DisplayText or k)
+						local bits = { n }
+						for _, fk in ipairs({"Rebirth", "RebirthLevel", "RequiredRebirth", "UnlockRebirth", "Price", "Cost", "Description", "Desc"}) do
+							if v[fk] ~= nil and tostring(v[fk]) ~= "" then
+								bits[#bits+1] = fk .. "=" .. tostring(v[fk])
+							end
+						end
+						-- nested rewards
+						if type(v.Rewards) == "table" then
+							local rw = {}
+							for rk, rv in pairs(v.Rewards) do
+								rw[#rw+1] = tostring(rk) .. "=" .. tostring(type(rv)=="table" and (rv.Name or rk) or rv)
+							end
+							if #rw > 0 then bits[#bits+1] = "Rewards:" .. table.concat(rw, ",") end
+						end
+						rows[#rows+1] = table.concat(bits, " | ")
+					else
+						rows[#rows+1] = tostring(k) .. "=" .. tostring(v)
+					end
+				end
+				table.sort(rows)
+				add(modName .. " DETAILED (" .. #rows .. "):")
+				for i = 1, math.min(#rows, 50) do
+					add("  " .. rows[i])
+				end
+			end
+		end
+	end)
+
+	-- Fuse recipes if present
+	pcall(function()
+		for _, modName in ipairs({"Fuse", "FuseMachine", "FuseRecipes", "Recipes", "Craft", "CraftRecipes"}) do
+			local mod = (datas and datas:FindFirstChild(modName)) or (shared and shared:FindFirstChild(modName))
+			local data = requireData(mod)
+			if type(data) == "table" then
+				local rows = {}
+				for k, v in pairs(data) do
+					if type(v) == "table" then
+						local out = tostring(v.Result or v.Output or v.Name or k)
+						local inputs = v.Ingredients or v.Inputs or v.Requires or v.Cost
+						local inStr = ""
+						if type(inputs) == "table" then
+							local t = {}
+							for ik, iv in pairs(inputs) do
+								t[#t+1] = tostring(ik) .. "x" .. tostring(iv)
+							end
+							inStr = table.concat(t, "+")
+						end
+						rows[#rows+1] = out .. (inStr ~= "" and (" <= " .. inStr) or "") .. (v.Event and (" @" .. tostring(v.Event)) or "")
+					end
+				end
+				if #rows > 0 then
+					table.sort(rows)
+					add(modName .. " (" .. #rows .. "): " .. table.concat(rows, " | ", 1, math.min(#rows, 40)))
+				end
+			end
+		end
+	end)
+
+	-- Mutations
+	pcall(function()
+		local mut = datas and requireData(datas:FindFirstChild("Mutations"))
+		if type(mut) == "table" then
+			local names = {}
+			for k, v in pairs(mut) do
+				names[#names+1] = type(v) == "table" and tostring(v.Name or v.DisplayName or k) or tostring(k)
+			end
+			table.sort(names)
+			add("MUTATIONS: " .. table.concat(names, ", ", 1, math.min(#names, 40)))
+		end
+	end)
+
+	-- Gears
+	pcall(function()
+		local g = datas and (requireData(datas:FindFirstChild("Gears")) or requireData(datas:FindFirstChild("Gear")))
+		if type(g) == "table" then
+			local names = {}
+			for k, v in pairs(g) do
+				names[#names+1] = type(v) == "table" and tostring(v.Name or v.DisplayName or k) or tostring(k)
+			end
+			table.sort(names)
+			add("GEARS (" .. #names .. "): " .. table.concat(names, ", ", 1, math.min(#names, 40)))
+		else
+			scanFolder(datas and datas:FindFirstChild("Gears"), "Gears")
+		end
+	end)
+
+	-- Updates
+	pcall(function()
+		local up = shared and requireData(shared:FindFirstChild("Updates"))
+		if type(up) == "table" then
+			if #up > 0 then
+				local tail = {}
+				for i = math.max(1, #up - 8), #up do
+					local e = up[i]
+					tail[#tail+1] = type(e) == "table" and tostring(e.Name or e.Title or e.Id or i) or tostring(e)
+				end
+				add("UPDATES recent: " .. table.concat(tail, " | "))
+			else
+				local names = {}
+				for k, v in pairs(up) do
+					names[#names+1] = tostring(k)
+				end
+				table.sort(names)
+				add("UPDATES keys: " .. table.concat(names, ", ", 1, math.min(#names, 20)))
+			end
+		end
+	end)
+
+	-- Events / TimedEvents
+	pcall(function()
+		for _, name in ipairs({"Events", "TimedEvents", "EventData", "LimitedEvents"}) do
+			local mod = (datas and datas:FindFirstChild(name)) or (shared and shared:FindFirstChild(name))
+			local data = requireData(mod)
+			if type(data) == "table" then
+				local names = {}
+				for k, v in pairs(data) do
+					names[#names+1] = type(v) == "table" and tostring(v.Name or v.DisplayName or k) or tostring(k)
+				end
+				table.sort(names)
+				add(name .. ": " .. table.concat(names, ", ", 1, math.min(#names, 30)))
+			end
+		end
+	end)
+
+	-- Scan any other Datas children names for discoverability
+	if datas then
+		local kids = {}
+		for _, c in ipairs(datas:GetChildren()) do kids[#kids+1] = c.Name end
+		table.sort(kids)
+		add("Datas modules: " .. table.concat(kids, ", "))
+	end
+	if shared then
+		local kids = {}
+		for _, c in ipairs(shared:GetChildren()) do kids[#kids+1] = c.Name end
+		table.sort(kids)
+		add("Shared modules: " .. table.concat(kids, ", ", 1, math.min(#kids, 40)))
+	end
+
+	add("=== STATIC LORE ===")
+	add("Sammy: name SAMMY age 24 color BLUE food PIZZA cat NOVA country BRAZIL game STEALABRAINROT")
+	add("Witch hat trait event: WITCHINGHOUR | Best DLC often GRIFFIN")
+	add("Halloween best-a-reskin-of often SPAGHETTITUALETTI; dug dug halloween day-of-october often PUMPUMPUM31")
+
+	return table.concat(lines, "\n")
+end
+
+local function getSabContext()
+	if _cachedCtx and (os.clock() - _cachedCtxAt) < 45 then
+		return _cachedCtx
+	end
+	local ok, ctx = pcall(buildSabGameContext)
+	_cachedCtx = (ok and ctx) or "GAME DATA UNAVAILABLE"
+	_cachedCtxAt = os.clock()
+	return _cachedCtx
+end
+
+local AI_SYSTEM = table.concat({
+	"You are the Steal a Brainrot (SAB) live riddle engine for redeem codes.",
+	"Reply with ONE token only: ALL CAPS, no spaces, no punctuation, no explanation.",
+	"Brainrot names must strip spaces (Spaghetti Tualetti -> SPAGHETTITUALETTI).",
+	"If asked twice/2 times, concatenate the answer.",
+	"Prefer LIVE GAME DATA when provided (newest update, top income, halloween-related list).",
+	"For best prefer highest Generation among matching candidates.",
+	"For reskin of X return the ORIGINAL base name in code form when known.",
+	"When asked trait event: find trait in TRAITS DETAILED and return its Event/Source as ONE token (e.g. pumpkin trait -> HALLOWEEN).",
+	"When asked gear rebirth: use GEARS/REBIRTHS DETAILED RequiredRebirth (sentry -> 7, medusa head -> 5).",
+	"Reskin of dug dug -> PUMPUMPUM; if also day of october/31 -> PUMPUMPUM31.",
+	"Medusa head has SNAKES; current year 2026.",
+	"Known: halloween reskin-of -> SPAGHETTITUALETTI; + day of october -> SPAGHETTITUALETTI31;",
+	"dug dug halloween/october -> PUMPUMPUM31; best DLC -> GRIFFIN; witch hat trait event -> WITCHINGHOUR.",
+	"Sammy facts: SAMMY, age 24, BLUE, PIZZA, NOVA, BRAZIL, STEALABRAINROT.",
+}, "\n")
+
+local LOCAL_DB = {
+	["how old am i"] = "24", ["my age"] = "24", ["what is my age"] = "24",
+	["what is my name"] = "SAMMY", ["whats my name"] = "SAMMY", ["what's my name"] = "SAMMY",
+	["what is my favorite color"] = "BLUE", ["my favorite color"] = "BLUE",
+	["what is my favorite food"] = "PIZZA", ["my favorite food"] = "PIZZA",
+	["what is my cats name"] = "NOVA", ["what is my cat's name"] = "NOVA", ["my cats name"] = "NOVA",
+	["who made steal a brainrot"] = "SAMMY", ["who made the game"] = "SAMMY",
+	["what is the name of the game"] = "STEALABRAINROT",
+	["where do i live"] = "BRAZIL", ["my country"] = "BRAZIL",
+	["what is my name twice"] = "SAMMYSAMMY", ["my name twice"] = "SAMMYSAMMY",
+	["my age twice"] = "2424", ["what is my age twice"] = "2424",
+	["what is the best brainrot in the new halloween update a reskin of"] = "SPAGHETTITUALETTI",
+	["best brainrot in the new halloween update a reskin of"] = "SPAGHETTITUALETTI",
+	["best halloween brainrot a reskin of"] = "SPAGHETTITUALETTI",
+	["what is the best brainrot in the halloween update a reskin of"] = "SPAGHETTITUALETTI",
+	["halloween best brainrot reskin of"] = "SPAGHETTITUALETTI",
+	["what is the new best brainrot in the halloween update"] = "SPAGHETTITUALETTI",
+	["best brainrot in the new halloween update"] = "SPAGHETTITUALETTI",
+	["what is a reskin of dug dug in halloween update"] = "PUMPUMPUM31",
+	["reskin of dug dug in halloween"] = "PUMPUMPUM31",
+	["halloween reskin of dug dug"] = "PUMPUMPUM31",
+	["dug dug halloween"] = "PUMPUMPUM31",
+	["what is the best dlc brainrot you can unbox right now"] = "GRIFFIN",
+	["best dlc brainrot you can unbox right now"] = "GRIFFIN",
+	["best dlc brainrot"] = "GRIFFIN",
+	["best dlc"] = "GRIFFIN",
+
+	["best dlc"] = "GRIFFIN",
+	["what is the best dlc"] = "GRIFFIN",
+	-- traits / events
+	["whats the event that gave you witch hat trait"] = "WITCHINGHOUR",
+	["what's the event that gave you witch hat trait"] = "WITCHINGHOUR",
+	["what is the event that gave you witch hat trait"] = "WITCHINGHOUR",
+	["event that gave witch hat trait"] = "WITCHINGHOUR",
+	["witch hat trait event"] = "WITCHINGHOUR",
+	["witch hat trait"] = "WITCHINGHOUR",
+	["wizard hat trait"] = "WITCHINGHOUR",
+	["witch hat"] = "WITCHINGHOUR",
+	["what event is witch hat from"] = "WITCHINGHOUR",
+	["what is the best brainrot of the halloween update a reskin of and the day of october"] = "SPAGHETTITUALETTI31",
+	["best brainrot of the halloween update a reskin of and the day of october"] = "SPAGHETTITUALETTI31",
+	["best halloween brainrot a reskin of and the day of october"] = "SPAGHETTITUALETTI31",
+	["halloween update a reskin of and the day of october"] = "SPAGHETTITUALETTI31",
+
+	["witching hour"] = "WITCHINGHOUR",
+}
+
+local function trim(str)
+	return tostring(str or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function normalizeQuestion(text)
+	local l = trim(text):lower()
+	l = l:gsub("<[^>]+>", "")
+	l = l:gsub("[%?%.%,!;:]", " ")
+	l = l:gsub("^riddle%s+is%s+", "")
+	l = l:gsub("^the%s+riddle%s+is%s+", "")
+	l = l:gsub("^riddle%s*", "")
+	l = l:gsub("^question%s*", "")
+	l = l:gsub("%s+", " ")
+	return trim(l)
+end
+
+local function semanticAnswer(q)
+	q = normalizeQuestion(q)
+	if q == "" then return nil end
+	local function has(s) return q:find(s, 1, true) ~= nil end
+	if has("halloween") and has("reskin") and (has("october") or has("day of")) then return "SPAGHETTITUALETTI31" end
+	if has("halloween") and has("reskin") then return "SPAGHETTITUALETTI" end
+	if has("halloween") and has("best") and (has("brainrot") or has("reskin")) then
+		return "SPAGHETTITUALETTI"
+	end
+	if (has("dug dug") or has("dugdug")) and (has("halloween") or has("october") or has("reskin")) then
+		return "PUMPUMPUM31"
+	end
+	if has("dlc") and (has("best") or has("unbox") or has("right now") or has("currently")) then
+		return "GRIFFIN"
+	end
+	-- trait → event
+	if (has("witch hat") or has("wizard hat")) and (has("event") or has("trait") or has("gave") or has("from")) then
+		return "WITCHINGHOUR"
+	end
+	if has("witch hat") or has("wizard hat") then
+		return "WITCHINGHOUR"
+	end
+	if has("twice") or has("2 times") then
+		if has("name") then return "SAMMYSAMMY" end
+		if has("age") then return "2424" end
+		if has("color") then return "BLUEBLUE" end
+		if has("food") then return "PIZZAPIZZA" end
+	end
+	return nil
+end
+
+local WIKI_TRAIT_EVENT = {
+	["witch hat"] = "WITCHINGHOUR", ["wizard hat"] = "WITCHINGHOUR", ["witching hour"] = "WITCHINGHOUR",
+	["pumpkin"] = "HALLOWEEN", ["pumpkin trait"] = "HALLOWEEN", ["jack o lantern"] = "HALLOWEEN",
+	["jack o'lantern"] = "HALLOWEEN", ["jackolantern"] = "HALLOWEEN", ["jack o lantern trait"] = "HALLOWEEN",
+	["frightrot"] = "FRIGHTROT",
+	["nightmare"] = "WITCHINGHOUR",
+	["rip gravestone"] = "GRAVEDIGGER", ["rip tombstone"] = "GRAVEDIGGER", ["rip"] = "GRAVEDIGGER",
+	["jack o lantern"] = "HALLOWEEN", ["jack o' lantern"] = "HALLOWEEN", ["jackolantern"] = "HALLOWEEN",
+	["santa hat"] = "WINTERHOUR", ["reindeer pet"] = "CHRISTMAS", ["reindeer"] = "CHRISTMAS",
+	["bunny ears"] = "EASTERHOUR",
+	["pink egg"] = "EGGCITY", ["blue egg"] = "EGGCITY", ["green egg"] = "EGGCITY", ["orange egg"] = "EGGCITY",
+	["strawberry"] = "STRAWBERRYELEPHANT", ["meowl"] = "MEOWL", ["john pork"] = "JOHNPORK", ["skibidi"] = "SKIBIDITOILET",
+	["matteo hat"] = "MATTEO", ["tie"] = "DULDULDUL", ["spider"] = "SAMMYNISPYDERINI",
+	["galactic"] = "LAVACCASATURNOSATURNITA", ["taco"] = "RAININGTACOS", ["ufo"] = "UFO",
+	["snowy"] = "SNOW", ["comet struck"] = "COMET", ["cometstruck"] = "COMET",
+	["extinct"] = "EXTINCT", ["skeleton"] = "EXTINCT", ["10b"] = "10B",
+	["fire"] = "FIRE", ["lightning"] = "LIGHTNING", ["nyan"] = "NYAN", ["fireworks"] = "FIREWORKS",
+	["paint"] = "CHICLETEIRABICICLETEIRA", ["indonesia"] = "INDONESIA", ["indonesian"] = "INDONESIA",
+	["sombrero"] = "MEXICO", ["glitched"] = "GLITCH", ["crab"] = "CRABRAVE", ["claws"] = "CRABRAVE",
+	["bubblegum"] = "BUBBLEGUM", ["explosive"] = "BOMBARDIRO", ["halo"] = "DIVINE",
+	["lucky"] = "LUCKYPOT", ["chocolate"] = "VALENTINES", ["1 year"] = "1YEAR", ["26"] = "NEWYEAR2026",
+	["rainbow balloon"] = "EID", ["pink balloon"] = "EID", ["sun"] = "SUMMERHOUR",
+}
+
+local WIKI_FACT_LINES = table.concat({
+	"TRAIT→EVENT: witch hat/wizard hat→WITCHINGHOUR; RIP→GRAVEDIGGER; Santa hat→WINTERHOUR; Reindeer→CHRISTMAS;",
+	"Bunny ears→EASTERHOUR; eggs→EGGCITY; Strawberry→STRAWBERRYELEPHANT; Meowl→MEOWL; Skibidi→SKIBIDITOILET;",
+	"Matteo hat→MATTEO; Tie→DULDULDUL; Spider→SAMMYNISPYDERINI; Galactic→LAVACCASATURNOSATURNITA; Taco→RAININGTACOS;",
+	"Witching Hour spawns: Vampira Cappucina, Zombie Tralala, Frankentteo, La Vacca Jacko Linterino → LASPOOKYGRANDE",
+	"Sammy SAMMY/24/BLUE/PIZZA/NOVA/BRAZIL/STEALABRAINROT | best DLC GRIFFIN | halloween reskin-of SPAGHETTITUALETTI",
+}, "\n")
+
+
+
+-- Gear unlocks by rebirth (stable progression facts; live scan overrides when available)
+local GEAR_REBIRTH = {
+	["sentry"] = "7",
+	["all seeing sentry"] = "7",
+	["all-seeing sentry"] = "7",
+	["allseeing sentry"] = "7",
+	["medusa"] = "5",
+	["medusa head"] = "5",
+	["medusas head"] = "5",
+	["medusa's head"] = "5",
+	["invisibility"] = "4",
+	["invisibility cloak"] = "4",
+	["web slinger"] = "6",
+	["grapple"] = "3",
+	["grapple hook"] = "3",
+	["quantum cloner"] = "7",
+}
+
+-- Reskin base -> halloween form (no day)
+local RESKIN_MAP = {
+	["dug dug dug"] = "PUMPUMPUM",
+	["dug dug"] = "PUMPUMPUM",
+	["dugdugdug"] = "PUMPUMPUM",
+	["spaghetti tualetti"] = "SPAGHETTITUALETTI",
+	["sammyni fattini"] = "SAMMYNISPOOKYNI",
+}
+
+-- Misc fact answers (plural/year style redeem tokens)
+local FACT_DB = {
+	["what does medusa have on her head"] = "SNAKES",
+	["what does medusa have on her head plural"] = "SNAKES",
+	["medusa have on her head"] = "SNAKES",
+	["medusa on her head"] = "SNAKES",
+	["what year are we on"] = "2026",
+	["what year is it"] = "2026",
+	["what year are we in"] = "2026",
+	["current year"] = "2026",
+	["what event was the pumpkin trait in"] = "HALLOWEEN",
+	["what event is the pumpkin trait"] = "HALLOWEEN",
+	["pumpkin trait event"] = "HALLOWEEN",
+	["pumpkin trait"] = "HALLOWEEN",
+	["what event was the jack o lantern trait in"] = "HALLOWEEN",
+	["what rebirth do you get sentry"] = "7",
+	["what rebirth do you get the sentry"] = "7",
+	["what rebirth is sentry"] = "7",
+	["rebirth sentry"] = "7",
+	["what rebirth do you get medusa"] = "5",
+	["what rebirth medusa head"] = "5",
+	["reskin of dug dug dug"] = "PUMPUMPUM",
+	["what is the reskin of dug dug dug"] = "PUMPUMPUM",
+	["reskin of dug dug"] = "PUMPUMPUM",
+	["what is the reskin of dug dug"] = "PUMPUMPUM",
+}
+
+local function codeToken(name)
+	return tostring(name or ""):upper():gsub("%s+", ""):gsub("[^A-Z0-9]", "")
+end
+
+local function answerReskin(q)
+	q = normalizeQuestion(q)
+	local wantsDay = q:find("october", 1, true) or q:find("day of", 1, true) or q:find("31", 1, true)
+	for base, tok in pairs(RESKIN_MAP) do
+		if q:find(base, 1, true) and (q:find("reskin", 1, true) or q:find("halloween", 1, true)) then
+			if wantsDay then return tok .. "31" end
+			return tok
+		end
+	end
+	if q:find("dug", 1, true) and (q:find("reskin", 1, true) or q:find("halloween", 1, true)) then
+		return wantsDay and "PUMPUMPUM31" or "PUMPUMPUM"
+	end
+	return nil
+end
+
+local function answerGearRebirth(q)
+	q = normalizeQuestion(q)
+	if not (q:find("rebirth", 1, true) or q:find("unlock", 1, true) or q:find("get", 1, true)) then
+		return nil
+	end
+	for gear, rb in pairs(GEAR_REBIRTH) do
+		if q:find(gear, 1, true) then
+			return rb
+		end
+	end
+	return nil
+end
+
+local function answerFact(q)
+	q = normalizeQuestion(q)
+	if FACT_DB[q] then return FACT_DB[q] end
+	-- soft contains for medusa snakes
+	if q:find("medusa", 1, true) and q:find("head", 1, true) then
+		return "SNAKES"
+	end
+	if q:find("year", 1, true) and (q:find("we", 1, true) or q:find("current", 1, true) or q:find("what", 1, true)) then
+		return "2026"
+	end
+	if q:find("pumpkin", 1, true) and (q:find("trait", 1, true) or q:find("event", 1, true)) then
+		return "HALLOWEEN"
+	end
+	return nil
+end
+
+
+local function wikiTraitAnswer(q)
+	q = normalizeQuestion(q)
+	for trait, event in pairs(WIKI_TRAIT_EVENT) do
+		if q:find(trait, 1, true) then
+			if q:find("event", 1, true) or q:find("gave", 1, true) or q:find("from", 1, true)
+				or q:find("trait", 1, true) or q:find("how", 1, true) or q:find("which", 1, true)
+				or q:find("what", 1, true) then
+				return event
+			end
+		end
+	end
+	for trait, event in pairs(WIKI_TRAIT_EVENT) do
+		if q == trait or q == (trait .. " trait") then return event end
+	end
+	return nil
+end
+
+local function localExactAnswer(text)
+	local l = normalizeQuestion(text)
+	if LOCAL_DB[l] then return LOCAL_DB[l] end
+	local f = answerFact(text)
+	if f then return f end
+	local r = answerReskin(text)
+	if r then return r end
+	local g = answerGearRebirth(text)
+	if g then return g end
+	local w = wikiTraitAnswer(text)
+	if w then return w end
+	return semanticAnswer(text)
+end
+
+local function applyMultiplier(answer, text)
+	if not answer or answer == "" then return answer end
+	local l = normalizeQuestion(text)
+	local n = nil
+	if l:find("twice", 1, true) or l:find("2 times", 1, true) then n = 2 end
+	if l:find("thrice", 1, true) or l:find("3 times", 1, true) then n = 3 end
+	local m = l:match("(%d+)%s*times")
+	if m then m = tonumber(m); if m and m >= 2 and m <= 10 then n = m end end
+	if n and n > 1 then
+		local out = ""
+		for _ = 1, n do out = out .. answer end
+		return out
+	end
+	return answer
+end
+
+-- Scan live animals for a name matching the question (best gen among matches)
+local function liveScanAnswer(text)
+	local q = normalizeQuestion(text)
+	local RS = game:GetService("ReplicatedStorage")
+	local datas = RS:FindFirstChild("Datas")
+	local animals = datas and requireData(datas:FindFirstChild("Animals"))
+	if type(animals) ~= "table" then return nil end
+
+	local wantHalloween = q:find("halloween", 1, true) or q:find("spook", 1, true)
+	local wantBest = q:find("best", 1, true) or q:find("strongest", 1, true) or q:find("highest", 1, true)
+	local wantDlc = q:find("dlc", 1, true)
+	local wantReskinOf = q:find("reskin of", 1, true)
+
+	local candidates = {}
+	for _, a in pairs(animals) do
+		if type(a) == "table" and a.DisplayName then
+			local name = tostring(a.DisplayName)
+			local low = name:lower()
+			local gen = tonumber(a.Generation) or 0
+			local src = type(a.ObtainedFrom) == "table" and tostring(a.ObtainedFrom.Source or "") or ""
+			local blob = (low .. " " .. src:lower())
+			local ok = true
+			if wantHalloween and not (blob:find("halloween") or blob:find("spook") or blob:find("skeleton") or blob:find("haunt") or blob:find("pump") or blob:find("witch")) then
+				-- still allow if rarity secret and recent — keep soft
+			end
+			candidates[#candidates + 1] = { name = name, gen = gen, src = src, low = low }
+		end
+	end
+	if #candidates == 0 then return nil end
+
+	if wantBest then
+		table.sort(candidates, function(a, b) return a.gen > b.gen end)
+		-- if halloween filter has any hits, prefer those
+		if wantHalloween then
+			for _, c in ipairs(candidates) do
+				local b = c.low .. " " .. c.src:lower()
+				if b:find("halloween") or b:find("spook") or b:find("haunt") or b:find("skeleton") or b:find("pump") then
+					return c.name:gsub("%s+", ""):upper()
+				end
+			end
+		end
+		if wantDlc then
+			for _, c in ipairs(candidates) do
+				if c.low:find("griffin", 1, true) then return "GRIFFIN" end
+			end
+		end
+		return candidates[1].name:gsub("%s+", ""):upper()
+	end
+	return nil
+end
+
+local function queryAI(question)
+	if not httpRequest then return nil, "no http (executor)" end
+	if not GROQ_API_KEY or GROQ_API_KEY == "" then return nil, "no key" end
+	local q = normalizeQuestion(question)
+	if q == "" then q = trim(question) end
+	local ctx = getSabContext()
+	-- keep prompt size sane
+	if #ctx > 12000 then ctx = ctx:sub(1, 12000) .. "\n...(truncated)" end
+	local body = HS:JSONEncode({
+		model = "llama-3.3-70b-versatile",
+		messages = {
+			{ role = "system", content = AI_SYSTEM },
+			{ role = "user", content = table.concat({
+				"/no_think",
+				"WIKI FACTS:",
+				WIKI_FACT_LINES,
+				"",
+				"LIVE SAB DATA:",
+				ctx,
+				"",
+				"RIDDLE:",
+				tostring(q),
+				"",
+				"ONE redeem token only (ALL CAPS, no spaces). Prefer WIKI TRAIT→EVENT maps when asking about traits/events.",
+			}, "\n") },
+		},
+		temperature = 0,
+		max_tokens = 48,
+	})
+	local ok, res = pcall(httpRequest, {
+		Url = "https://api.groq.com/openai/v1/chat/completions",
+		Method = "POST",
+		Headers = {
+			["Content-Type"] = "application/json",
+			["Authorization"] = "Bearer " .. GROQ_API_KEY,
+		},
+		Body = body,
+	})
+	if not ok then return nil, "http: " .. tostring(res):sub(1, 80) end
+	if type(res) ~= "table" or not res.Body then return nil, "empty body" end
+	local sc = tonumber(res.StatusCode)
+	if sc and sc ~= 200 then return nil, "HTTP " .. tostring(sc) .. " " .. tostring(res.Body):sub(1, 80) end
+	local pOk, parsed = pcall(HS.JSONDecode, HS, res.Body)
+	if not pOk or type(parsed) ~= "table" then return nil, "json fail" end
+	if parsed.error then return nil, "API: " .. tostring(parsed.error.message or parsed.error):sub(1, 80) end
+	local choice = parsed.choices and parsed.choices[1]
+	if not choice then return nil, "no choices" end
+	local raw = trim((choice.message and choice.message.content) or "")
+	if raw:find("\n") then
+		local lines = {}
+		for line in (raw .. "\n"):gmatch("(.-)\n") do
+			line = trim(line)
+			if line ~= "" then lines[#lines + 1] = line end
+		end
+		if #lines > 0 then raw = lines[#lines] end
+	end
+	local answer = raw:upper()
+		:gsub("^ANSWER%s*:?%s*", "")
+		:gsub("^THE%s+ANSWER%s+IS%s+", "")
+		:gsub("[%s%?%.%,!\"'`:\n\r%-]+", "")
+	if answer == "" then return nil, "empty answer" end
+	if #answer > 48 then answer = answer:sub(1, 48) end
+	return answer
+end
+
+local function solveRiddle(text)
+	text = trim(text)
+	if text == "" then return nil, "empty" end
+	local localAns = localExactAnswer(text)
+	if localAns then
+		return formatCode(applyMultiplier(localAns, text)), "local"
+	end
+	local live = nil
+	pcall(function() live = liveScanAnswer(text) end)
+	if live and live ~= "" then
+		return formatCode(applyMultiplier(live, text)), "live"
+	end
+	local aiAns, err = queryAI(text)
+	if aiAns and aiAns ~= "" then
+		return formatCode(applyMultiplier(aiAns, text)), "ai"
+	end
+	return nil, err or "ai fail"
+end
+
+local solving = false
+local function handleRiddleText(text)
+	text = trim(tostring(text or ""))
+	if text == "" then return end
+	if solving then return end
+	setQuestion(text)
+	if not _G.RiddlerAIEnabled then
+		flashSub("AI off — enable AI ON")
+		return
+	end
+	solving = true
+	if refs.statusSub then refs.statusSub.Text = "AI solving..." end
+	if refs.statusTitle then refs.statusTitle.Text = "● SOLVING" end
+	task.spawn(function()
+		local ans, src = solveRiddle(text)
+		solving = false
+		if ans and ans ~= "" then
+			setAnswer(ans)
+			if refs.statusTitle then refs.statusTitle.Text = "● ONLINE" end
+			flashSub("✓ " .. tostring(src) .. " → " .. ans)
+		else
+			if refs.statusSub then refs.statusSub.Text = "No answer" end
+			if refs.statusTitle then refs.statusTitle.Text = "● ONLINE" end
+			flashSub("✗ " .. tostring(src))
+			print("[K2 Riddler] solve fail:", src)
+		end
+	end)
+end
+
+local listenConn = nil
+local function stopListen()
+	if listenConn then
+		pcall(function() listenConn:Disconnect() end)
+		listenConn = nil
+	end
+end
+
+local function startListen()
+	stopListen()
+	local remote = nil
+	pcall(function() remote = getNotificationRemote() end)
+	-- getNotificationRemote defined later — resolve inline too
+	if not remote then
+		pcall(function()
+			local rs = game:GetService("ReplicatedStorage")
+			local controllers = rs:FindFirstChild("Controllers")
+			if not controllers then return end
+			local ok, mod = pcall(function()
+				return require(controllers:FindFirstChild("NotificationController", true))
+			end)
+			if not ok or type(mod) ~= "table" or type(mod.Start) ~= "function" then return end
+			local getupvalues_ = (debug and debug.getupvalues) or getupvalues
+			if not getupvalues_ then return end
+			local ok2, ups = pcall(getupvalues_, mod.Start)
+			if not ok2 or type(ups) ~= "table" then return end
+			local packages = rs:FindFirstChild("Packages")
+			local net = packages and packages:FindFirstChild("Net")
+			for _, v in pairs(ups) do
+				if typeof(v) == "Instance" and (v:IsA("RemoteEvent") or v:IsA("UnreliableRemoteEvent")) then
+					if not net or v.Parent == net then remote = v break end
+				end
+			end
+		end)
+	end
+	if not remote then
+		flashSub("Notify remote missing")
+		return false
+	end
+	listenConn = remote.OnClientEvent:Connect(function(...)
+		if not _G.RiddlerListenEnabled then return end
+		local args = table.pack(...)
+		if args.n < 1 or type(args[1]) ~= "string" then return end
+		local text = tostring(args[1])
+		local lower = text:lower()
+		-- auto-arm AI when "riddle" appears
+		if lower:find("riddle", 1, true) and not _G.RiddlerAIEnabled then
+			_G.RiddlerAIEnabled = true
+			-- refresh toggles paint if possible
+			for _, t in ipairs(toggleRegistry) do
+				if type(t.paint) == "function" then pcall(t.paint) end
+			end
+			if refs.statusAI then refs.statusAI.Text = "ON" end
+		end
+		handleRiddleText(text)
+	end)
+	flashSub("Listening")
+	return true
+end
+
+-- Hook toggle side-effects after GUI builds (called from boot)
+_G.K2RiddlerStartListen = startListen
+_G.K2RiddlerStopListen = stopListen
+_G.K2RiddlerSolve = handleRiddleText
+
+-- ========== APPLY MOOD (Code Sniper style) ==========
+local function applyMood(idx, instant)
+	idx = ((idx - 1) % #PRESETS) + 1
+	bgIndex = idx
+	_G.RiddlerBgIndex = idx
+	local p = PRESETS[idx]
+	loadThemeInto(p)
+	local function set(obj, prop, val)
+		if not obj or not obj.Parent then return end
+		if instant then pcall(function() obj[prop] = val end) else tw(obj, { [prop] = val }) end
+	end
+	for _, e in ipairs(themeRegistry) do
+		local val = Theme[e.key]
+		if val ~= nil then set(e.obj, e.prop, val) end
+	end
+	for _, t in ipairs(toggleRegistry) do
+		if type(t.paint) == "function" then pcall(t.paint) end
+	end
+	local isHall = (p.name == "Halloween")
+	if refs.logoTxt then refs.logoTxt.Text = isHall and "🎃" or "K2" end
+	if refs.titleLbl then refs.titleLbl.Text = isHall and "🎃 K2 Riddler" or "K2 Riddler" end
+	if refs.logoGrad then
+		pcall(function()
+			refs.logoGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.titleUnderlineGrad then
+		pcall(function()
+			refs.titleUnderlineGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.ambientGlowGrad then
+		pcall(function()
+			refs.ambientGlowGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.mainStroke then
+		pcall(function()
+			refs.mainStroke.Color = Theme.Border
+			refs.mainStroke.Thickness = 2.0
+			refs.mainStroke.Transparency = 0.28
+		end)
+	end
+	if refs.moodLabel then
+		refs.moodLabel.Text = p.name
+		set(refs.moodLabel, "TextColor3", Theme.Cyan)
+	end
+	if refs.bg then
+		if instant then refs.bg.ImageTransparency = p.imgT
+		else tw(refs.bg, { ImageTransparency = p.imgT }) end
+	end
+	if refs.shade then
+		if instant then refs.shade.BackgroundTransparency = p.shadeT
+		else tw(refs.shade, { BackgroundTransparency = p.shadeT }) end
+	end
+	if refs.mainGrad then
+		pcall(function()
+			refs.mainGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Top),
+				ColorSequenceKeypoint.new(0.5, Theme.Panel),
+				ColorSequenceKeypoint.new(1, Theme.Side),
+			})
+		end)
+	end
+	if refs.borderGrad then
+		pcall(function()
+			refs.borderGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.minGrad then
+		pcall(function()
+			refs.minGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.actGrads then
+		for _, g in ipairs(refs.actGrads) do
+			pcall(function()
+				g.Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Theme.Accent2),
+					ColorSequenceKeypoint.new(0.5, Theme.Accent),
+					ColorSequenceKeypoint.new(1, Theme.Accent2),
+				})
+			end)
+		end
+	end
+	-- Force background image apply every mood change
+	if refs.bg then
+		local url = BG_URLS[((idx - 1) % #BG_URLS) + 1]
+		task.spawn(function()
+			local asset = resolveBg(url, ((idx - 1) % #BG_URLS) + 1)
+			if asset and refs.bg then
+				refs.bg.Image = asset
+				refs.bg.Visible = true
+				refs.bg.ImageTransparency = p.imgT or 0.48
+			elseif url and url:find("^rbxassetid://") and refs.bg then
+				refs.bg.Image = url
+				refs.bg.Visible = true
+				refs.bg.ImageTransparency = p.imgT or 0.48
+			end
+		end)
+	end
+	if refs.shade then
+		pcall(function()
+			refs.shade.BackgroundColor3 = Theme.Void
+			refs.shade.BackgroundTransparency = p.shadeT or 0.38
+		end)
+	end
+	if MainFrame then
+		pcall(function() MainFrame.BackgroundTransparency = 0.16 end)
+	end
+	saveCfg()
+end
+
+_G.K2RiddlerCycleBg = function()
+	local nextI = bgIndex + 1
+	_G.RiddlerBgIndex = ((nextI - 1) % #PRESETS) + 1
+	if refs.bg then tw(refs.bg, { ImageTransparency = 0.92 }, TweenInfo.new(0.15)) end
+	if refs.shade then tw(refs.shade, { BackgroundTransparency = 0.12 }, TweenInfo.new(0.15)) end
+	task.delay(0.18, function()
+		task.spawn(function()
+			local i = ((nextI - 1) % #BG_URLS) + 1
+			local asset = resolveBg(BG_URLS[i], i)
+			if refs.bg then
+				if asset then
+					refs.bg.Image = asset
+					refs.bg.Visible = true
+				elseif BG_URLS[i] and BG_URLS[i]:find("^rbxassetid://") then
+					refs.bg.Image = BG_URLS[i]
+					refs.bg.Visible = true
+				else
+					-- keep previous image rather than hiding
+					refs.bg.Visible = true
+				end
+			end
+		end)
+		applyMood(nextI, false)
+	end)
+end
+
+-- ========== ScreenGui ==========
+ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "K2Riddler"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 1001
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+do
+	local parented = false
+	pcall(function()
+		if gethui then ScreenGui.Parent = gethui(); parented = ScreenGui.Parent ~= nil end
+	end)
+	if not parented then
+		pcall(function()
+			if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+			ScreenGui.Parent = game:GetService("CoreGui")
+			parented = ScreenGui.Parent ~= nil
+		end)
+	end
+	if not parented then
+		pcall(function()
+			local pg = LP and (LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5))
+			if pg then ScreenGui.Parent = pg end
+		end)
+	end
+	getgenv().K2RiddlerGui = ScreenGui
+end
+
+MainFrame = Instance.new("Frame")
+MainFrame.Name = "Main"
+MainFrame.AnchorPoint = Vector2.new(1, 0)
+MainFrame.Position = UDim2.new(1, -16, 0, 16)
+MainFrame.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+MainFrame.BackgroundColor3 = Theme.Panel
+MainFrame.BackgroundTransparency = 0.16
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.Visible = true
+MainFrame.ZIndex = 10
+MainFrame.Parent = ScreenGui
+corner(MainFrame, 16)
+register(MainFrame, "BackgroundColor3", "Panel")
+
+do
+	local sh = Instance.new("ImageLabel")
+	sh.Name = "Shadow"
+	sh.AnchorPoint = Vector2.new(0.5, 0.5)
+	sh.Position = UDim2.fromScale(0.5, 0.52)
+	sh.Size = UDim2.new(1, 36, 1, 36)
+	sh.BackgroundTransparency = 1
+	sh.Image = "rbxassetid://5028857084"
+	sh.ImageColor3 = Color3.new(0, 0, 0)
+	sh.ImageTransparency = 0.5
+	sh.ScaleType = Enum.ScaleType.Slice
+	sh.SliceCenter = Rect.new(24, 24, 276, 276)
+	sh.ZIndex = 9
+	sh.Parent = MainFrame
+end
+
+refs.bg = Instance.new("ImageLabel")
+refs.bg.Name = "SelectedBackground"
+refs.bg.Size = UDim2.fromScale(1, 1)
+refs.bg.BackgroundTransparency = 1
+refs.bg.BorderSizePixel = 0
+refs.bg.ScaleType = Enum.ScaleType.Crop
+refs.bg.Image = BG_URLS[bgIndex] or BG_URLS[1]
+refs.bg.ImageTransparency = (PRESETS[bgIndex] and PRESETS[bgIndex].imgT) or 0.42
+refs.bg.Visible = true
+refs.bg.ZIndex = 10
+refs.bg.Parent = MainFrame
+corner(refs.bg, 16)
+task.spawn(function()
+	local asset = resolveBg(BG_URLS[bgIndex], bgIndex)
+	if asset and refs.bg then refs.bg.Image = asset; refs.bg.Visible = true end
+end)
+
+refs.shade = Instance.new("Frame")
+refs.shade.Name = "BgShade"
+refs.shade.Size = UDim2.fromScale(1, 1)
+refs.shade.BackgroundColor3 = Theme.Void
+refs.shade.BackgroundTransparency = (PRESETS[bgIndex] and PRESETS[bgIndex].shadeT) or 0.34
+refs.shade.BorderSizePixel = 0
+refs.shade.ZIndex = 10
+refs.shade.Parent = MainFrame
+corner(refs.shade, 16)
+register(refs.shade, "BackgroundColor3", "Void")
+
+refs.glass = Instance.new("Frame")
+refs.glass.Name = "Glass"
+refs.glass.Size = UDim2.fromScale(1, 1)
+refs.glass.BackgroundColor3 = Theme.Panel
+refs.glass.BackgroundTransparency = 0.58
+refs.glass.BorderSizePixel = 0
+refs.glass.ZIndex = 10
+refs.glass.Parent = MainFrame
+corner(refs.glass, 16)
+register(refs.glass, "BackgroundColor3", "Panel")
+refs.mainGrad = Instance.new("UIGradient")
+refs.mainGrad.Rotation = 118
+refs.mainGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Theme.Top),
+	ColorSequenceKeypoint.new(0.5, Theme.Panel),
+	ColorSequenceKeypoint.new(1, Theme.Side),
+})
+refs.mainGrad.Parent = refs.glass
+
+-- Outer glow outline (match Sniper thickness / gradient)
+refs.mainStroke = stroke(MainFrame, Theme.Border, 2.0, 0.28)
+register(refs.mainStroke, "Color", "Border")
+refs.borderGrad = Instance.new("UIGradient")
+refs.borderGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Theme.Accent2),
+	ColorSequenceKeypoint.new(0.5, Theme.Accent),
+	ColorSequenceKeypoint.new(1, Theme.Accent2),
+})
+refs.borderGrad.Parent = refs.mainStroke
+
+-- ========== HEADER (exact Code Sniper) ==========
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 48)
+Header.BackgroundColor3 = Theme.Top
+Header.BackgroundTransparency = 0.45
+Header.BorderSizePixel = 0
+Header.ZIndex = 12
+Header.Parent = MainFrame
+corner(Header, 16)
+register(Header, "BackgroundColor3", "Top")
+do
+	local cover = Instance.new("Frame")
+	cover.Size = UDim2.new(1, 0, 0, 16)
+	cover.Position = UDim2.new(0, 0, 1, -16)
+	cover.BackgroundColor3 = Theme.Top
+	cover.BackgroundTransparency = 0.45
+	cover.BorderSizePixel = 0
+	cover.ZIndex = 12
+	cover.Parent = Header
+	register(cover, "BackgroundColor3", "Top")
+end
+
+local ambientGlow = Instance.new("Frame")
+ambientGlow.Name = "ModernAmbientGlow"
+ambientGlow.Size = UDim2.fromOffset(160, 70)
+ambientGlow.Position = UDim2.new(1, -130, 0, -40)
+ambientGlow.BackgroundColor3 = Theme.Cyan
+ambientGlow.BackgroundTransparency = 0.82
+ambientGlow.BorderSizePixel = 0
+ambientGlow.ZIndex = 12
+ambientGlow.Parent = Header
+corner(ambientGlow, 80)
+register(ambientGlow, "BackgroundColor3", "Cyan")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 18
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(0.5, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.48, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	g.Parent = ambientGlow
+	refs.ambientGlowGrad = g
+end
+
+-- K2 square badge (Duels-style) — same as Code Sniper
+local Logo = Instance.new("Frame")
+Logo.Name = "K2Badge"
+Logo.Size = UDim2.fromOffset(32, 32)
+Logo.Position = UDim2.fromOffset(12, 10)
+Logo.BackgroundColor3 = Theme.Cyan
+Logo.BackgroundTransparency = 0.08
+Logo.BorderSizePixel = 0
+Logo.ZIndex = 13
+Logo.Active = true
+Logo.Parent = Header
+corner(Logo, 12)
+local logoStroke = stroke(Logo, Theme.Accent2, 0.9, 0.25)
+register(Logo, "BackgroundColor3", "Cyan")
+register(logoStroke, "Color", "Accent2")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 35
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Parent = Logo
+	refs.logoGrad = g
+end
+local LogoTxt = Instance.new("TextLabel")
+LogoTxt.Size = UDim2.fromScale(1, 1)
+LogoTxt.BackgroundTransparency = 1
+LogoTxt.Text = "🎃"
+refs.logoTxt = LogoTxt
+LogoTxt.TextSize = 12
+LogoTxt.Font = Enum.Font.GothamBlack
+LogoTxt.TextColor3 = Theme.Contrast
+LogoTxt.ZIndex = 14
+LogoTxt.Parent = Logo
+register(LogoTxt, "TextColor3", "Contrast")
+
+local Title = Instance.new("TextLabel")
+Title.BackgroundTransparency = 1
+Title.Position = UDim2.fromOffset(52, 8)
+Title.Size = UDim2.new(1, -140, 0, 18)
+Title.Font = Enum.Font.GothamBlack
+Title.Text = "🎃 K2 Riddler"
+refs.titleLbl = Title
+Title.TextSize = 14
+Title.TextColor3 = Theme.Text
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.TextYAlignment = Enum.TextYAlignment.Center
+Title.ZIndex = 13
+Title.Parent = Header
+register(Title, "TextColor3", "Text")
+
+local Subtitle = Instance.new("TextLabel")
+Subtitle.BackgroundTransparency = 1
+Subtitle.Position = UDim2.fromOffset(52, 26)
+Subtitle.Size = UDim2.new(1, -140, 0, 12)
+Subtitle.Font = Enum.Font.GothamBold
+Subtitle.Text = "discord.gg/k2scripts"
+Subtitle.TextSize = 9
+Subtitle.TextColor3 = Theme.Cyan
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.ZIndex = 13
+Subtitle.Parent = Header
+register(Subtitle, "TextColor3", "Cyan")
+refs.subtitle = Subtitle
+
+local titleUnderline = Instance.new("Frame")
+titleUnderline.Name = "ModernHeaderAccent"
+titleUnderline.Size = UDim2.fromOffset(72, 2)
+titleUnderline.Position = UDim2.fromOffset(52, 42)
+titleUnderline.BackgroundColor3 = Theme.Cyan
+titleUnderline.BackgroundTransparency = 0.05
+titleUnderline.BorderSizePixel = 0
+titleUnderline.ZIndex = 13
+titleUnderline.Parent = Header
+corner(titleUnderline, 2)
+register(titleUnderline, "BackgroundColor3", "Cyan")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 0
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(0.5, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	g.Parent = titleUnderline
+	refs.titleUnderlineGrad = g
+end
+
+local titleGlowBar = Instance.new("Frame")
+titleGlowBar.Size = UDim2.fromOffset(90, 6)
+titleGlowBar.Position = UDim2.fromOffset(44, 40)
+titleGlowBar.BackgroundColor3 = Theme.Cyan
+titleGlowBar.BackgroundTransparency = 0.78
+titleGlowBar.BorderSizePixel = 0
+titleGlowBar.ZIndex = 12
+titleGlowBar.Parent = Header
+corner(titleGlowBar, 3)
+register(titleGlowBar, "BackgroundColor3", "Cyan")
+
+local function winBtn(x, sym, isClose)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(22, 22)
+	b.Position = UDim2.new(1, x, 0, 15)
+	b.BackgroundColor3 = Theme.Panel
+	b.BackgroundTransparency = 0.35
+	b.Text = sym
+	b.Font = FT
+	b.TextSize = 12
+	b.TextColor3 = Theme.Muted
+	b.AutoButtonColor = false
+	b.ZIndex = 14
+	b.Parent = Header
+	corner(b, 8)
+	local st = stroke(b, Theme.Border, 0.8, 0.5)
+	register(b, "BackgroundColor3", "Panel")
+	register(b, "TextColor3", "Muted")
+	register(st, "Color", "Border")
+	b.MouseEnter:Connect(function()
+		tw(b, { BackgroundTransparency = 0.1, TextColor3 = isClose and Theme.Red or Theme.Cyan }, TIS)
+	end)
+	b.MouseLeave:Connect(function()
+		tw(b, { BackgroundTransparency = 0.35, TextColor3 = Theme.Muted }, TIS)
+	end)
+	return b
+end
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Name = "MinK2"
+MinBtn.Size = UDim2.fromOffset(22, 22)
+MinBtn.Position = UDim2.new(1, -78, 0, 13)
+MinBtn.BackgroundColor3 = Theme.Cyan
+MinBtn.BackgroundTransparency = 0.08
+MinBtn.Text = "K2"
+MinBtn.Font = Enum.Font.GothamBlack
+MinBtn.TextSize = 8
+MinBtn.TextColor3 = Theme.Contrast
+MinBtn.AutoButtonColor = false
+MinBtn.ZIndex = 14
+MinBtn.Parent = Header
+corner(MinBtn, 7)
+local minSt = stroke(MinBtn, Theme.Accent2, 0.85, 0.3)
+register(MinBtn, "BackgroundColor3", "Cyan")
+register(MinBtn, "TextColor3", "Contrast")
+register(minSt, "Color", "Accent2")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 35
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Parent = MinBtn
+	refs.minGrad = g
+end
+MinBtn.MouseEnter:Connect(function()
+	tw(MinBtn, { BackgroundTransparency = 0 }, TIS)
+end)
+MinBtn.MouseLeave:Connect(function()
+	tw(MinBtn, { BackgroundTransparency = 0.08 }, TIS)
+end)
+
+local BgBtn = winBtn(-52, "⌂", false)
+local CloseBtn = winBtn(-26, "×", true)
+BgBtn.MouseButton1Click:Connect(function()
+	if _G.K2RiddlerCycleBg then _G.K2RiddlerCycleBg() end
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+	if ScreenGui then ScreenGui:Destroy() end
+	getgenv().K2RiddlerGui = nil
+end)
+
+refs.moodLabel = Instance.new("TextLabel")
+refs.moodLabel.BackgroundTransparency = 1
+refs.moodLabel.Position = UDim2.new(1, -110, 0, 36)
+refs.moodLabel.Size = UDim2.fromOffset(80, 12)
+refs.moodLabel.Font = FB
+refs.moodLabel.Text = PRESETS[bgIndex].name
+refs.moodLabel.TextSize = 8
+refs.moodLabel.TextColor3 = Theme.Cyan
+refs.moodLabel.TextXAlignment = Enum.TextXAlignment.Right
+refs.moodLabel.ZIndex = 13
+refs.moodLabel.Parent = Header
+register(refs.moodLabel, "TextColor3", "Cyan")
+
+-- ========== CONTENT ==========
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -16, 1, -100)
+Content.Position = UDim2.fromOffset(8, 52)
+Content.BackgroundTransparency = 1
+Content.ClipsDescendants = true
+Content.ZIndex = 12
+Content.Parent = MainFrame
+
+PageMain = Instance.new("ScrollingFrame")
+PageMain.Size = UDim2.fromScale(1, 1)
+PageMain.BackgroundTransparency = 1
+PageMain.BorderSizePixel = 0
+PageMain.ScrollBarThickness = 2
+PageMain.ScrollBarImageColor3 = Theme.Cyan
+PageMain.CanvasSize = UDim2.new(0, 0, 0, 420)
+PageMain.ClipsDescendants = true
+PageMain.ZIndex = 12
+PageMain.Parent = Content
+register(PageMain, "ScrollBarImageColor3", "Cyan")
+
+PageSettings = Instance.new("ScrollingFrame")
+PageSettings.Size = UDim2.fromScale(1, 1)
+PageSettings.BackgroundTransparency = 1
+PageSettings.BorderSizePixel = 0
+PageSettings.Visible = false
+PageSettings.ScrollBarThickness = 3
+PageSettings.ScrollBarImageColor3 = Theme.Cyan
+PageSettings.CanvasSize = UDim2.new(0, 0, 0, 220)
+PageSettings.ZIndex = 12
+PageSettings.Parent = Content
+register(PageSettings, "ScrollBarImageColor3", "Cyan")
+
+local function makeCardToggle(parent, y, icon, label, getFn, setFn)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 44)
+	row.Position = UDim2.fromOffset(0, y)
+	row.BackgroundColor3 = Theme.Card
+	row.BackgroundTransparency = 0.28
+	row.BorderSizePixel = 0
+	row.ZIndex = 13
+	row.Parent = parent
+	corner(row, 12)
+	local st = stroke(row, Theme.Border, 1, 0.45)
+	register(row, "BackgroundColor3", "Card")
+	register(st, "Color", "Border")
+
+	local ic = Instance.new("TextLabel")
+	ic.Size = UDim2.fromOffset(22, 22)
+	ic.Position = UDim2.fromOffset(10, 11)
+	ic.BackgroundTransparency = 1
+	ic.Text = icon
+	ic.TextSize = 12
+	ic.ZIndex = 14
+	ic.Parent = row
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -90, 0, 18)
+	lbl.Position = UDim2.fromOffset(36, 6)
+	lbl.BackgroundTransparency = 1
+	lbl.Font = FB
+	lbl.Text = label
+	lbl.TextSize = 11
+	lbl.TextColor3 = Theme.Text
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.ZIndex = 14
+	lbl.Parent = row
+	register(lbl, "TextColor3", "Text")
+
+	local track = Instance.new("Frame")
+	track.Size = UDim2.fromOffset(40, 20)
+	track.Position = UDim2.new(1, -52, 0.5, -10)
+	track.BackgroundColor3 = Theme.ToggleOff
+	track.BorderSizePixel = 0
+	track.ZIndex = 14
+	track.Parent = row
+	corner(track, 10)
+	register(track, "BackgroundColor3", "ToggleOff")
+
+	local knob = Instance.new("Frame")
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.Position = UDim2.fromOffset(2, 2)
+	knob.BackgroundColor3 = Theme.Muted
+	knob.BorderSizePixel = 0
+	knob.ZIndex = 15
+	knob.Parent = track
+	corner(knob, 8)
+	register(knob, "BackgroundColor3", "Muted")
+
+	local function paint()
+		local on = getFn()
+		tw(track, { BackgroundColor3 = on and Theme.Cyan or Theme.ToggleOff })
+		tw(knob, {
+			Position = on and UDim2.fromOffset(22, 2) or UDim2.fromOffset(2, 2),
+			BackgroundColor3 = on and Theme.Contrast or Theme.Muted,
+		})
+		st.Color = on and Theme.Accent2 or Theme.Border
+		lbl.TextColor3 = on and Theme.Text or Theme.Muted
+	end
+	paint()
+	table.insert(toggleRegistry, { paint = paint, getState = getFn })
+
+	local hit = Instance.new("TextButton")
+	hit.Size = UDim2.fromScale(1, 1)
+	hit.BackgroundTransparency = 1
+	hit.Text = ""
+	hit.ZIndex = 16
+	hit.Parent = row
+	hit.MouseButton1Click:Connect(function()
+		setFn(not getFn())
+		paint()
+		saveCfg()
+	end)
+	return row
+end
+
+-- MAIN PAGE content (riddler controls) — Code Sniper LTM pills
+local function makeCardToggle(parent, y, icon, title, desc, initial, cb)
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, 0, 0, 44)
+	card.Position = UDim2.fromOffset(0, y)
+	card.BackgroundColor3 = Theme.Card
+	card.BackgroundTransparency = 0.12
+	card.BorderSizePixel = 0
+	card.ZIndex = 13
+	card.Parent = parent
+	corner(card, 10)
+	local st = stroke(card, Theme.Border, 1, 0.55)
+	register(card, "BackgroundColor3", "Card")
+	register(st, "Color", "Border")
+	local rowGrad = Instance.new("UIGradient")
+	rowGrad.Rotation = 90
+	rowGrad.Color = ColorSequence.new(Color3.fromRGB(255,255,255), Color3.fromRGB(190,184,214))
+	rowGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.92),
+		NumberSequenceKeypoint.new(1, 0.97),
+	})
+	rowGrad.Parent = card
+
+	local ic = Instance.new("TextLabel")
+	ic.BackgroundTransparency = 1
+	ic.Position = UDim2.fromOffset(12, desc and 7 or 0)
+	ic.Size = UDim2.new(1, -84, desc and 0 or 1, desc and 16 or 0)
+	ic.Font = Enum.Font.GothamBold
+	ic.Text = (icon and (icon .. "  ") or "") .. title
+	ic.TextSize = 12
+	ic.TextColor3 = Theme.Text
+	ic.TextXAlignment = Enum.TextXAlignment.Left
+	ic.TextTruncate = Enum.TextTruncate.AtEnd
+	ic.ZIndex = 14
+	ic.Parent = card
+	register(ic, "TextColor3", "Text")
+
+	if desc and desc ~= "" then
+		local ds = Instance.new("TextLabel")
+		ds.BackgroundTransparency = 1
+		ds.Position = UDim2.fromOffset(12, 24)
+		ds.Size = UDim2.new(1, -84, 0, 13)
+		ds.Font = FM
+		ds.Text = desc
+		ds.TextSize = 10
+		ds.TextColor3 = Theme.Muted
+		ds.TextXAlignment = Enum.TextXAlignment.Left
+		ds.TextTruncate = Enum.TextTruncate.AtEnd
+		ds.ZIndex = 14
+		ds.Parent = card
+		register(ds, "TextColor3", "Muted")
+	end
+
+	local b = Instance.new("TextButton")
+	b.Text = ""
+	b.AutoButtonColor = false
+	b.BackgroundTransparency = 1
+	b.BorderSizePixel = 0
+	b.Size = UDim2.fromOffset(62, 26)
+	b.AnchorPoint = Vector2.new(1, 0.5)
+	b.Position = UDim2.new(1, -12, 0.5, 0)
+	b.ZIndex = 15
+	b.Parent = card
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.fromScale(1, 1)
+	fill.BorderSizePixel = 0
+	fill.ZIndex = 15
+	fill.Parent = b
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+	local g = Instance.new("UIGradient")
+	g.Rotation = 0
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(1, Theme.Accent),
+	})
+	g.Parent = fill
+	local edge = Instance.new("UIStroke")
+	edge.Thickness = 1
+	edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	edge.Parent = fill
+
+	local gloss = Instance.new("Frame")
+	gloss.Size = UDim2.new(1, -4, 0.5, 0)
+	gloss.Position = UDim2.fromOffset(2, 1)
+	gloss.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	gloss.BorderSizePixel = 0
+	gloss.ZIndex = 16
+	gloss.Parent = b
+	Instance.new("UICorner", gloss).CornerRadius = UDim.new(1, 0)
+	local glossGrad = Instance.new("UIGradient")
+	glossGrad.Rotation = 90
+	glossGrad.Transparency = NumberSequence.new(0, 1)
+	glossGrad.Parent = gloss
+
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.fromScale(1, 1)
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextSize = 11
+	lbl.TextXAlignment = Enum.TextXAlignment.Center
+	lbl.ZIndex = 17
+	lbl.Parent = b
+
+	local sc = Instance.new("UIScale")
+	sc.Parent = b
+
+	local state = initial == true
+	local function paint()
+		fill.BackgroundColor3 = state and Color3.fromRGB(255, 255, 255) or Theme.ToggleOff
+		g.Enabled = state
+		pcall(function()
+			g.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(1, Theme.Accent),
+			})
+		end)
+		edge.Color = state and Theme.Accent2 or Theme.Border
+		edge.Transparency = state and 0.45 or 0.3
+		gloss.BackgroundTransparency = state and 0.8 or 0.93
+		lbl.Text = state and "ON" or "OFF"
+		lbl.TextColor3 = state and Theme.Text or Theme.Muted
+		st.Color = Theme.Border
+		st.Transparency = state and 0.35 or 0.55
+	end
+	paint()
+	table.insert(toggleRegistry, {
+		getState = function() return state end,
+		paint = paint,
+		fill = fill, grad = g, edge = edge, lbl = lbl, cardStroke = st,
+	})
+
+	local function ripple()
+		local r = Instance.new("Frame")
+		r.AnchorPoint = Vector2.new(0.5, 0.5)
+		r.Position = UDim2.fromScale(0.5, 0.5)
+		r.Size = UDim2.fromOffset(0, 0)
+		r.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		r.BackgroundTransparency = 0.55
+		r.BorderSizePixel = 0
+		r.ZIndex = 18
+		r.Parent = b
+		Instance.new("UICorner", r).CornerRadius = UDim.new(1, 0)
+		local sz = math.max(b.AbsoluteSize.X, b.AbsoluteSize.Y) * 1.6
+		local anim = TS:Create(r, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.fromOffset(sz, sz), BackgroundTransparency = 1,
+		})
+		anim.Completed:Connect(function() r:Destroy() end)
+		anim:Play()
+	end
+
+	b.MouseButton1Click:Connect(function()
+		state = not state
+		paint()
+		ripple()
+		sc.Scale = 0.9
+		TS:Create(sc, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		if cb then task.spawn(cb, state) end
+		saveCfg()
+	end)
+	card.MouseEnter:Connect(function()
+		tw(st, { Color = Theme.Accent, Transparency = 0.25 }, TIS)
+	end)
+	card.MouseLeave:Connect(function()
+		tw(st, { Color = Theme.Border, Transparency = state and 0.35 or 0.55 }, TIS)
+	end)
+	return card
+end
+
+-- Status card (Code Sniper hierarchy)
+local StatusCard = Instance.new("Frame")
+StatusCard.Size = UDim2.new(1, 0, 0, 56)
+StatusCard.Position = UDim2.fromOffset(0, 2)
+StatusCard.BackgroundColor3 = Theme.Card
+StatusCard.BackgroundTransparency = 0.28
+StatusCard.BorderSizePixel = 0
+StatusCard.ZIndex = 13
+StatusCard.Parent = PageMain
+corner(StatusCard, 12)
+local scStroke = stroke(StatusCard, Theme.Border, 1, 0.45)
+register(StatusCard, "BackgroundColor3", "Card")
+register(scStroke, "Color", "Border")
+
+local StatusDot = Instance.new("Frame")
+StatusDot.Size = UDim2.fromOffset(8, 8)
+StatusDot.Position = UDim2.fromOffset(12, 14)
+StatusDot.BackgroundColor3 = Theme.Cyan
+StatusDot.BorderSizePixel = 0
+StatusDot.ZIndex = 14
+StatusDot.Parent = StatusCard
+corner(StatusDot, 4)
+register(StatusDot, "BackgroundColor3", "Cyan")
+
+local StatusTitle = Instance.new("TextLabel")
+StatusTitle.BackgroundTransparency = 1
+StatusTitle.Position = UDim2.fromOffset(26, 10)
+StatusTitle.Size = UDim2.new(1, -36, 0, 14)
+StatusTitle.Font = Enum.Font.GothamBlack
+StatusTitle.Text = "● ONLINE"
+StatusTitle.TextSize = 11
+StatusTitle.TextColor3 = Theme.Text
+StatusTitle.TextXAlignment = Enum.TextXAlignment.Left
+StatusTitle.ZIndex = 14
+StatusTitle.Parent = StatusCard
+register(StatusTitle, "TextColor3", "Text")
+refs.statusTitle = StatusTitle
+refs.statusDot = StatusDot
+
+local StatusSub = Instance.new("TextLabel")
+StatusSub.BackgroundTransparency = 1
+StatusSub.Position = UDim2.fromOffset(12, 28)
+StatusSub.Size = UDim2.new(1, -24, 0, 12)
+StatusSub.Font = FM
+StatusSub.Text = "Waiting for riddle"
+StatusSub.TextSize = 9
+StatusSub.TextTruncate = Enum.TextTruncate.AtEnd
+StatusSub.TextColor3 = Theme.Muted
+StatusSub.TextXAlignment = Enum.TextXAlignment.Left
+StatusSub.ZIndex = 14
+StatusSub.Parent = StatusCard
+register(StatusSub, "TextColor3", "Muted")
+refs.statusSub = StatusSub
+
+do
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Position = UDim2.fromOffset(12, 40)
+	l.Size = UDim2.fromOffset(50, 12)
+	l.Font = Enum.Font.GothamBold
+	l.Text = "AI"
+	l.TextSize = 8
+	l.TextColor3 = Theme.Muted
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.ZIndex = 14
+	l.Parent = StatusCard
+	register(l, "TextColor3", "Muted")
+	local v = Instance.new("TextLabel")
+	v.BackgroundTransparency = 1
+	v.Position = UDim2.fromOffset(28, 40)
+	v.Size = UDim2.fromOffset(36, 12)
+	v.Font = Enum.Font.GothamBlack
+	v.Text = "OFF"
+	v.TextSize = 9
+	v.TextColor3 = Theme.Cyan
+	v.TextXAlignment = Enum.TextXAlignment.Left
+	v.ZIndex = 14
+	v.Parent = StatusCard
+	register(v, "TextColor3", "Cyan")
+	refs.statusAI = v
+	local l2 = Instance.new("TextLabel")
+	l2.BackgroundTransparency = 1
+	l2.Position = UDim2.fromOffset(80, 40)
+	l2.Size = UDim2.fromOffset(50, 12)
+	l2.Font = Enum.Font.GothamBold
+	l2.Text = "LISTEN"
+	l2.TextSize = 8
+	l2.TextColor3 = Theme.Muted
+	l2.TextXAlignment = Enum.TextXAlignment.Left
+	l2.ZIndex = 14
+	l2.Parent = StatusCard
+	register(l2, "TextColor3", "Muted")
+	local v2 = Instance.new("TextLabel")
+	v2.BackgroundTransparency = 1
+	v2.Position = UDim2.fromOffset(120, 40)
+	v2.Size = UDim2.fromOffset(36, 12)
+	v2.Font = Enum.Font.GothamBlack
+	v2.Text = "OFF"
+	v2.TextSize = 9
+	v2.TextColor3 = Theme.Cyan
+	v2.TextXAlignment = Enum.TextXAlignment.Left
+	v2.ZIndex = 14
+	v2.Parent = StatusCard
+	register(v2, "TextColor3", "Cyan")
+	refs.statusListen = v2
+end
+
+local function refreshStatus()
+	if refs.statusAI then refs.statusAI.Text = (_G.RiddlerAIEnabled and "ON" or "OFF") end
+	if refs.statusListen then refs.statusListen.Text = (_G.RiddlerListenEnabled and "ON" or "OFF") end
+	if refs.statusSub then
+		if currentAnswer ~= "" then
+			refs.statusSub.Text = "Answer ready"
+		elseif currentQuestion ~= "" then
+			refs.statusSub.Text = "Riddle detected"
+		else
+			refs.statusSub.Text = "Waiting for riddle"
+		end
+	end
+end
+
+local y = 64
+makeCardToggle(PageMain, y, "🤖", "AI ON", "Groq AI solves new riddles", _G.RiddlerAIEnabled == true, function(s)
+	_G.RiddlerAIEnabled = s
+	refreshStatus()
+end)
+y = y + 50
+makeCardToggle(PageMain, y, "👂", "LISTEN ON", "Watch announcements for riddles", _G.RiddlerListenEnabled == true, function(s)
+	_G.RiddlerListenEnabled = s
+	refreshStatus()
+	if s then
+		if type(startListen) == "function" then startListen()
+		elseif _G.K2RiddlerStartListen then _G.K2RiddlerStartListen() end
+	else
+		if type(stopListen) == "function" then stopListen()
+		elseif _G.K2RiddlerStopListen then _G.K2RiddlerStopListen() end
+	end
+end)
+y = y + 54
+
+local function makeCard(parent, yy, h)
+	local c = Instance.new("Frame")
+	c.Size = UDim2.new(1, 0, 0, h)
+	c.Position = UDim2.fromOffset(0, yy)
+	c.BackgroundColor3 = Theme.Card
+	c.BackgroundTransparency = 0.28
+	c.BorderSizePixel = 0
+	c.ZIndex = 13
+	c.Parent = parent
+	corner(c, 12)
+	local st = stroke(c, Theme.Border, 1, 0.45)
+	register(c, "BackgroundColor3", "Card")
+	register(st, "Color", "Border")
+	return c, st
+end
+
+local qCard = makeCard(PageMain, y, 58)
+do
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.new(1, -12, 0, 12)
+	t.Position = UDim2.fromOffset(10, 4)
+	t.BackgroundTransparency = 1
+	t.Font = FB
+	t.Text = "QUESTION"
+	t.TextSize = 8
+	t.TextColor3 = Theme.Muted
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.ZIndex = 14
+	t.Parent = qCard
+	register(t, "TextColor3", "Muted")
+	refs.qLabel = Instance.new("TextLabel")
+	refs.qLabel.Size = UDim2.new(1, -12, 1, -18)
+	refs.qLabel.Position = UDim2.fromOffset(10, 16)
+	refs.qLabel.BackgroundTransparency = 1
+	refs.qLabel.Font = FM
+	refs.qLabel.Text = "Waiting for riddle..."
+	refs.qLabel.TextSize = 10
+	refs.qLabel.TextColor3 = Theme.Text
+	refs.qLabel.TextXAlignment = Enum.TextXAlignment.Left
+	refs.qLabel.TextYAlignment = Enum.TextYAlignment.Top
+	refs.qLabel.TextWrapped = true
+	refs.qLabel.ZIndex = 14
+	refs.qLabel.Parent = qCard
+	register(refs.qLabel, "TextColor3", "Text")
+end
+y = y + 64
+
+local aCard = makeCard(PageMain, y, 48)
+do
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.new(1, -12, 0, 12)
+	t.Position = UDim2.fromOffset(10, 3)
+	t.BackgroundTransparency = 1
+	t.Font = FB
+	t.Text = "ANSWER (CODE)"
+	t.TextSize = 8
+	t.TextColor3 = Theme.Muted
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.ZIndex = 14
+	t.Parent = aCard
+	register(t, "TextColor3", "Muted")
+	refs.aLabel = Instance.new("TextLabel")
+	refs.aLabel.Size = UDim2.new(1, -12, 0, 24)
+	refs.aLabel.Position = UDim2.fromOffset(10, 18)
+	refs.aLabel.BackgroundTransparency = 1
+	refs.aLabel.Font = FT
+	refs.aLabel.Text = "—"
+	refs.aLabel.TextSize = 14
+	refs.aLabel.TextColor3 = Theme.Cyan
+	refs.aLabel.TextXAlignment = Enum.TextXAlignment.Left
+	refs.aLabel.ZIndex = 14
+	refs.aLabel.Parent = aCard
+	register(refs.aLabel, "TextColor3", "Cyan")
+end
+y = y + 54
+
+-- Action buttons — Code Sniper glass style
+local btnRow = Instance.new("Frame")
+btnRow.Size = UDim2.new(1, 0, 0, 34)
+btnRow.Position = UDim2.fromOffset(0, y)
+btnRow.BackgroundTransparency = 1
+btnRow.ZIndex = 13
+btnRow.Parent = PageMain
+
+refs.actStrokes = {}
+local function actBtn(text, xScale, fn)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1 / 3, -4, 1, 0)
+	b.Position = UDim2.new(xScale, 2, 0, 0)
+	b.BackgroundColor3 = Theme.Card
+	b.BackgroundTransparency = 0.18
+	b.Text = text
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 10
+	b.TextColor3 = Theme.Muted
+	b.AutoButtonColor = false
+	b.ZIndex = 14
+	b.Parent = btnRow
+	corner(b, 10)
+	local st = stroke(b, Theme.Border, 1, 0.5)
+	register(b, "BackgroundColor3", "Card")
+	register(b, "TextColor3", "Muted")
+	register(st, "Color", "Border")
+	table.insert(refs.actStrokes, st)
+	b.MouseEnter:Connect(function()
+		tw(b, { TextColor3 = Theme.Text, BackgroundTransparency = 0.08 }, TIS)
+		tw(st, { Color = Theme.Accent, Transparency = 0.35 }, TIS)
+	end)
+	b.MouseLeave:Connect(function()
+		tw(b, { TextColor3 = Theme.Muted, BackgroundTransparency = 0.18 }, TIS)
+		tw(st, { Color = Theme.Border, Transparency = 0.5 }, TIS)
+	end)
+	b.MouseButton1Click:Connect(fn)
+	return b
+end
+actBtn("COPY", 0, copyAnswer)
+actBtn("CLEAR", 1 / 3, clearAll)
+actBtn("REDEEM", 2 / 3, redeemAnswer)
+y = y + 40
+
+makeCardToggle(PageMain, y, "⚡", "AUTO REDEEM", "Submit answer automatically", _G.RiddlerAutoRedeem == true, function(s)
+	_G.RiddlerAutoRedeem = s
+end)
+y = y + 50
+
+
+
+
+-- ========== ANNOUNCEMENT FIRE (exact Luna / Code Sniper path) ==========
+local SAMMY_USER_ID = 2678001507
+
+local function getNotificationRemote()
+	local rs = game:GetService("ReplicatedStorage")
+	local controllers = rs:FindFirstChild("Controllers")
+	if not controllers then return nil end
+	local ok, mod = pcall(function()
+		return require(controllers:FindFirstChild("NotificationController", true))
+	end)
+	if not ok or type(mod) ~= "table" or type(mod.Start) ~= "function" then
+		return nil
+	end
+	local getupvalues_ = (debug and debug.getupvalues) or getupvalues
+	if not getupvalues_ then return nil end
+	local ok2, ups = pcall(getupvalues_, mod.Start)
+	if not ok2 or type(ups) ~= "table" then return nil end
+	local packages = rs:FindFirstChild("Packages")
+	local net = packages and packages:FindFirstChild("Net")
+	for _, v in pairs(ups) do
+		if typeof(v) == "Instance" and (v:IsA("RemoteEvent") or v:IsA("UnreliableRemoteEvent")) then
+			if not net or v.Parent == net then
+				return v
+			end
+		end
+	end
+	return nil
+end
+
+local function fireAnnouncement(txt)
+	txt = tostring(txt or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if txt == "" then return false, "empty" end
+
+	local remote = nil
+	pcall(function() remote = getNotificationRemote() end)
+
+	local getconns = (typeof(getconnections) == "function" and getconnections)
+		or (debug and typeof(debug.getconnections) == "function" and debug.getconnections)
+	local method = nil
+
+	if remote and typeof(firesignal) == "function" then
+		local ok = pcall(function()
+			firesignal(remote.OnClientEvent, txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+		end)
+		if ok then method = "firesignal" end
+	end
+
+	if not method and remote and typeof(getconns) == "function" then
+		local ok = pcall(function()
+			local conns = getconns(remote.OnClientEvent)
+			if type(conns) == "table" then
+				for _, c in ipairs(conns) do
+					pcall(function()
+						if c.Enabled ~= false then
+							c:Fire(txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+						end
+					end)
+				end
+			end
+		end)
+		if ok then method = "getconnections" end
+	end
+
+	-- Fallback: fire any Net remote that looks like notifications
+	if not method then
+		pcall(function()
+			local net = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
+			net = net and net:FindFirstChild("Net")
+			if not net then return end
+			for _, r in ipairs(net:GetDescendants()) do
+				if r:IsA("RemoteEvent") or r:IsA("UnreliableRemoteEvent") then
+					local n = r.Name:lower()
+					if n:find("notif", 1, true) or n:find("announce", 1, true) or n:find("toast", 1, true) then
+						pcall(function()
+							if typeof(firesignal) == "function" then
+								firesignal(r.OnClientEvent, txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+							end
+						end)
+						if typeof(getconns) == "function" then
+							for _, c in ipairs(getconns(r.OnClientEvent) or {}) do
+								pcall(function()
+									if c.Enabled ~= false then
+										c:Fire(txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+									end
+								end)
+							end
+						end
+						method = "net-scan"
+						break
+					end
+				end
+			end
+		end)
+	end
+
+	return method ~= nil, method or "unresolved"
+end
+
+-- ========== RIDDLE TEST SENDER (Code Sniper style) ==========
+local function buildTestSender()
+	if ScreenGui:FindFirstChild("RiddleTestSender") then
+		ScreenGui.RiddleTestSender:Destroy()
+	end
+	local P = Instance.new("Frame")
+	P.Name = "RiddleTestSender"
+	P.Size = UDim2.fromOffset(280, 168)
+	P.Position = UDim2.new(0.5, -140, 0.5, -84)
+	P.BackgroundColor3 = Theme.Panel
+	P.BackgroundTransparency = 0.08
+	P.BorderSizePixel = 0
+	P.ZIndex = 200
+	P.Parent = ScreenGui
+	corner(P, 14)
+	local pst = stroke(P, Theme.Border, 1.2, 0.35)
+	register(P, "BackgroundColor3", "Panel")
+	register(pst, "Color", "Border")
+
+	local PH = Instance.new("Frame")
+	PH.Size = UDim2.new(1, 0, 0, 36)
+	PH.BackgroundColor3 = Theme.Top
+	PH.BackgroundTransparency = 0.35
+	PH.BorderSizePixel = 0
+	PH.ZIndex = 201
+	PH.Parent = P
+	corner(PH, 14)
+	register(PH, "BackgroundColor3", "Top")
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(12, 0)
+	title.Size = UDim2.new(1, -48, 1, 0)
+	title.Font = FT
+	title.Text = "Riddle Test"
+	title.TextSize = 13
+	title.TextColor3 = Theme.Text
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.ZIndex = 202
+	title.Parent = PH
+	register(title, "TextColor3", "Text")
+
+	local X = Instance.new("TextButton")
+	X.Size = UDim2.fromOffset(24, 24)
+	X.Position = UDim2.new(1, -30, 0.5, -12)
+	X.BackgroundColor3 = Theme.Side
+	X.Text = "×"
+	X.Font = FT
+	X.TextSize = 14
+	X.TextColor3 = Theme.Muted
+	X.AutoButtonColor = false
+	X.ZIndex = 202
+	X.Parent = PH
+	corner(X, 8)
+	X.MouseButton1Click:Connect(function() P:Destroy() end)
+
+	local Box = Instance.new("TextBox")
+	Box.Size = UDim2.new(1, -24, 0, 44)
+	Box.Position = UDim2.fromOffset(12, 44)
+	Box.BackgroundColor3 = Theme.Card
+	Box.BackgroundTransparency = 0.15
+	Box.BorderSizePixel = 0
+	Box.PlaceholderText = "type a riddle announcement..."
+	Box.PlaceholderColor3 = Theme.Muted
+	Box.Text = ""
+	Box.TextColor3 = Theme.Text
+	Box.ClearTextOnFocus = false
+	Box.Font = FM
+	Box.TextSize = 12
+	Box.TextXAlignment = Enum.TextXAlignment.Left
+	Box.TextYAlignment = Enum.TextYAlignment.Top
+	Box.TextWrapped = true
+	Box.MultiLine = true
+	Box.ZIndex = 202
+	Box.Parent = P
+	corner(Box, 8)
+	register(Box, "BackgroundColor3", "Card")
+	register(Box, "TextColor3", "Text")
+
+	local samples = {
+		"what is my real name",
+		"how old am i",
+		"what is my favorite color",
+		"what is the best brainrot in the new halloween update a reskin of",
+		"what is a reskin of dug dug in halloween update",
+		"what is the best dlc brainrot you can unbox right now",
+		"what is my name twice",
+		"who made steal a brainrot",
+		"what is my age twice",
+		"best halloween brainrot a reskin of",
+		"whats the event that gave you witch hat trait",
+	}
+
+	local SampleBtn = Instance.new("TextButton")
+	SampleBtn.Size = UDim2.fromOffset(100, 30)
+	SampleBtn.Position = UDim2.fromOffset(12, 98)
+	SampleBtn.BackgroundColor3 = Theme.Card
+	SampleBtn.BackgroundTransparency = 0.1
+	SampleBtn.Text = "SAMPLE"
+	SampleBtn.TextColor3 = Theme.Text
+	SampleBtn.Font = FB
+	SampleBtn.TextSize = 11
+	SampleBtn.AutoButtonColor = false
+	SampleBtn.ZIndex = 202
+	SampleBtn.Parent = P
+	corner(SampleBtn, 8)
+	local ss = stroke(SampleBtn, Theme.Border, 1, 0.45)
+	register(SampleBtn, "BackgroundColor3", "Card")
+	register(SampleBtn, "TextColor3", "Text")
+	register(ss, "Color", "Border")
+	SampleBtn.MouseButton1Click:Connect(function()
+		Box.Text = samples[math.random(1, #samples)]
+	end)
+
+	local SendBtn = Instance.new("TextButton")
+	SendBtn.Size = UDim2.fromOffset(120, 30)
+	SendBtn.Position = UDim2.new(1, -132, 0, 98)
+	SendBtn.BackgroundColor3 = Theme.Cyan
+	SendBtn.BackgroundTransparency = 0.08
+	SendBtn.Text = "SEND"
+	SendBtn.TextColor3 = Theme.Contrast
+	SendBtn.Font = FB
+	SendBtn.TextSize = 11
+	SendBtn.AutoButtonColor = false
+	SendBtn.ZIndex = 202
+	SendBtn.Parent = P
+	corner(SendBtn, 8)
+	register(SendBtn, "BackgroundColor3", "Cyan")
+	register(SendBtn, "TextColor3", "Contrast")
+
+	local note = Instance.new("TextLabel")
+	note.Size = UDim2.new(1, -24, 0, 28)
+	note.Position = UDim2.fromOffset(12, 134)
+	note.BackgroundTransparency = 1
+	note.Text = "Fires top announcement like Code Sniper · sets Riddler question"
+	note.TextColor3 = Theme.Muted
+	note.Font = FM
+	note.TextSize = 9
+	note.TextWrapped = true
+	note.TextXAlignment = Enum.TextXAlignment.Left
+	note.ZIndex = 202
+	note.Parent = P
+	register(note, "TextColor3", "Muted")
+
+	local function doSend()
+		local txt = tostring(Box.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if txt == "" then
+			flashSub("Empty test")
+			return
+		end
+		-- Fire top announcement (same path as Code Sniper / Luna)
+		local ok, method = fireAnnouncement(txt)
+		flashSub((ok and ("Sent · " .. tostring(method)) or ("Fail · " .. tostring(method))))
+		-- Also run solver pipeline (AI if enabled)
+		handleRiddleText(txt)
+		Box.Text = ""
+	end
+	SendBtn.MouseButton1Click:Connect(doSend)
+	-- Do NOT auto-send on FocusLost (mobile keyboard Done closes typing and was wiping/closing UX)
+	-- User must tap SEND explicitly
+
+
+	-- drag
+	do
+		local dragging, dragStart, startPos, dragInput
+		PH.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = P.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then dragging = false end
+				end)
+			end
+		end)
+		PH.InputChanged:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+				dragInput = input
+			end
+		end)
+		UIS.InputChanged:Connect(function(input)
+			if dragging and input == dragInput then
+				local d = input.Position - dragStart
+				P.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end
+		end)
+	end
+end
+
+-- SETTINGS
+do
+	local note = Instance.new("TextLabel")
+	note.Size = UDim2.new(1, 0, 0, 40)
+	note.Position = UDim2.fromOffset(0, 4)
+	note.BackgroundTransparency = 1
+	note.Font = FM
+	note.Text = "AI key not wired yet.\\nHome (⌂) cycles theme + background."
+	note.TextSize = 10
+	note.TextColor3 = Theme.Muted
+	note.TextWrapped = true
+	note.TextYAlignment = Enum.TextYAlignment.Top
+	note.ZIndex = 13
+	note.Parent = PageSettings
+	register(note, "TextColor3", "Muted")
+
+	local testBtn = Instance.new("TextButton")
+	testBtn.Size = UDim2.new(1, 0, 0, 36)
+	testBtn.Position = UDim2.fromOffset(0, 52)
+	testBtn.BackgroundColor3 = Theme.Card
+	testBtn.BackgroundTransparency = 0.18
+	testBtn.Text = "RIDDLE TEST"
+	testBtn.Font = FB
+	testBtn.TextSize = 11
+	testBtn.TextColor3 = Theme.Text
+	testBtn.AutoButtonColor = false
+	testBtn.ZIndex = 14
+	testBtn.Parent = PageSettings
+	corner(testBtn, 10)
+	local ts = stroke(testBtn, Theme.Border, 1, 0.45)
+	register(testBtn, "BackgroundColor3", "Card")
+	register(testBtn, "TextColor3", "Text")
+	register(ts, "Color", "Border")
+	testBtn.MouseButton1Click:Connect(function()
+		buildTestSender()
+	end)
+end
+
+
+-- ========== NAV (MAIN | SETTINGS) ==========
+local Nav = Instance.new("Frame")
+Nav.Size = UDim2.new(1, -16, 0, 38)
+Nav.Position = UDim2.new(0, 8, 1, -46)
+Nav.BackgroundColor3 = Theme.Card
+Nav.BackgroundTransparency = 0.25
+Nav.BorderSizePixel = 0
+Nav.ZIndex = 14
+Nav.Parent = MainFrame
+corner(Nav, 12)
+local navSt = stroke(Nav, Theme.Border, 1, 0.45)
+register(Nav, "BackgroundColor3", "Card")
+register(navSt, "Color", "Border")
+
+local tabIndicator = Instance.new("Frame")
+tabIndicator.Size = UDim2.new(0.5, -8, 0, 2)
+tabIndicator.Position = UDim2.new(0, 6, 1, -4)
+tabIndicator.BackgroundColor3 = Theme.Cyan
+tabIndicator.BorderSizePixel = 0
+tabIndicator.ZIndex = 15
+tabIndicator.Parent = Nav
+corner(tabIndicator, 1)
+register(tabIndicator, "BackgroundColor3", "Cyan")
+
+local function navTab(text, xScale, isMain)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0.5, -6, 1, -6)
+	b.Position = UDim2.new(xScale, 4, 0, 3)
+	b.BackgroundTransparency = 1
+	b.Text = text
+	b.Font = FB
+	b.TextSize = 11
+	b.TextColor3 = isMain and Theme.Text or Theme.Muted
+	b.ZIndex = 15
+	b.Parent = Nav
+	register(b, "TextColor3", isMain and "Text" or "Muted")
+	return b
+end
+local navMain = navTab("◎  MAIN", 0, true)
+local navSet = navTab("⚙  SETTINGS", 0.5, false)
+navMain.MouseButton1Click:Connect(function()
+	PageMain.Visible = true
+	PageSettings.Visible = false
+	tw(tabIndicator, { Position = UDim2.new(0, 6, 1, -4) }, TIS)
+	navMain.TextColor3 = Theme.Text
+	navSet.TextColor3 = Theme.Muted
+end)
+navSet.MouseButton1Click:Connect(function()
+	PageMain.Visible = false
+	PageSettings.Visible = true
+	tw(tabIndicator, { Position = UDim2.new(0.5, 2, 1, -4) }, TIS)
+	navSet.TextColor3 = Theme.Text
+	navMain.TextColor3 = Theme.Muted
+end)
+
+-- ========== ORB ==========
+Orb = Instance.new("TextButton")
+Orb.Size = UDim2.fromOffset(40, 40)
+Orb.AnchorPoint = Vector2.new(1, 0)
+Orb.Position = UDim2.new(1, -16, 0, 16)
+Orb.BackgroundColor3 = Theme.Cyan
+Orb.BackgroundTransparency = 0.08
+Orb.Text = "K2"
+Orb.Font = FT
+Orb.TextSize = 11
+Orb.TextColor3 = Theme.Contrast
+Orb.Visible = false
+Orb.ZIndex = 20
+Orb.AutoButtonColor = false
+Orb.Parent = ScreenGui
+corner(Orb, 20)
+local orbSt = stroke(Orb, Theme.Cyan, 1.2, 0.35)
+register(Orb, "BackgroundColor3", "Cyan")
+register(Orb, "TextColor3", "Contrast")
+register(orbSt, "Color", "Cyan")
+
+local isMinimized = false
+local function setMinimized(state)
+	isMinimized = state
+	if state then
+		tw(MainFrame, { Size = UDim2.fromOffset(PANEL_W, 0), BackgroundTransparency = 1 }, TIS)
+		task.delay(0.25, function()
+			MainFrame.Visible = false
+			Orb.Visible = true
+		end)
+	else
+		MainFrame.Visible = true
+		Orb.Visible = false
+		MainFrame.Size = UDim2.fromOffset(PANEL_W * 0.94, PANEL_H * 0.94)
+		MainFrame.BackgroundTransparency = 1
+		tw(MainFrame, { Size = UDim2.fromOffset(PANEL_W, PANEL_H), BackgroundTransparency = 0.16 }, TIB)
+	end
+end
+MinBtn.MouseButton1Click:Connect(function() setMinimized(true) end)
+Orb.MouseButton1Click:Connect(function() setMinimized(false) end)
+
+-- Drag
+do
+	local dragging, dragStart, startPos, dragInput
+	MainFrame.Active = true
+	MainFrame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = MainFrame.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	MainFrame.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+	UIS.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
+			local d = input.Position - dragStart
+			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+end
+
+MainFrame.Visible = true
+MainFrame.Size = UDim2.fromOffset(PANEL_W * 0.94, PANEL_H * 0.94)
+MainFrame.BackgroundTransparency = 1
+tw(MainFrame, { Size = UDim2.fromOffset(PANEL_W, PANEL_H), BackgroundTransparency = 0.16 }, TIB)
+
+task.spawn(function()
+	local startIdx = math.clamp(tonumber(_G.RiddlerBgIndex) or bgIndex or 1, 1, #PRESETS)
+	local bi = ((startIdx - 1) % #BG_URLS) + 1
+	local asset = resolveBg(BG_URLS[bi], bi)
+	if refs.bg then
+		if asset then
+			refs.bg.Image = asset
+			refs.bg.Visible = true
+		elseif BG_URLS[bi]:find("^rbxassetid://") then
+			refs.bg.Image = BG_URLS[bi]
+			refs.bg.Visible = true
+		end
+	end
+	applyMood(startIdx, true)
+end)
+
+_G.K2RiddlerSetQuestion = setQuestion
+_G.K2RiddlerSetAnswer = setAnswer
+_G.K2RiddlerClear = clearAll
+_G.K2RiddlerRedeem = redeemAnswer
+_G.K2RiddlerCopy = copyAnswer
+_G.K2RiddlerSolve = handleRiddleText
+
+if _G.RiddlerListenEnabled then
+	task.defer(function()
+		if type(startListen) == "function" then startListen() end
+	end)
+end
+
+task.spawn(function() pcall(getSabContext) end)
+print("[K2 Riddler] AI + live Datas scan · key=" .. (GROQ_API_KEY and "set" or "missing"))
+
+_G.K2RiddlerRedeem = redeemAnswer
+
+print("[K2 Riddler] Code Sniper visual · 262x368 · ⌂ cycles theme")
