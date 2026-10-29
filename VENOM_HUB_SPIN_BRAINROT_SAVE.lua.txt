@@ -1599,7 +1599,7 @@ local INTRO = {
         -- IDs adicionados pelo usuario (Roblox Audio)
         {name="cabelo pretin", assetId="rbxassetid://126125120004125", volume=0.7},
         {name="pantanal", assetId="rbxassetid://94880156546772", volume=0.7},
-        {name="pro pai", assetId="rbxassetid://108808025565103", volume=0.7},
+        {name="nobru", assetId="rbxassetid://77428616866753", volume=0.7},
         {name="venom on top", assetId="rbxassetid://120847689201327", volume=0.7},
     }
 
@@ -16718,4 +16718,6 @@ task.spawn(function()
 end)
 
 end)
+
+)
 
